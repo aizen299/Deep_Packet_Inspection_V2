@@ -1,24 +1,25 @@
-# Use lightweight Linux base
-FROM ubuntu:22.04
+# backend/Dockerfile
 
-# Avoid interactive prompts
-ENV DEBIAN_FRONTEND=noninteractive
+FROM node:20-bullseye
 
-# Install build dependencies
-RUN apt update && apt install -y \
+# Install build tools for C++
+RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
-    libpcap-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy backend source
+# Copy backend
 COPY . .
 
-# Build the engine
-RUN mkdir build && cd build && cmake .. && make -j$(nproc)
+# Build C++ engine
+RUN chmod +x build.sh && ./build.sh
 
-# Default command
-CMD ["./build/bin/dpi_engine", "data/sample.pcap"]
+# Install API deps
+WORKDIR /app/api
+RUN npm install
+
+EXPOSE 4000
+
+CMD ["node", "server.js"]

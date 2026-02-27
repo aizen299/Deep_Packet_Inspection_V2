@@ -1,26 +1,57 @@
-# ===== Backend Build Artifacts =====
+# ==============================
+# Backend Build Artifacts
+# ==============================
+
 backend/build/
+backend/build/*
 backend/output/
-backend/dpi_engine
+backend/bin/
+backend/CMakeFiles/
+backend/CMakeCache.txt
+backend/Makefile
 backend/*.pcap
 backend/*.json
+backend/stats.json
 
-# ===== Global Generated Files =====
+# ==============================
+# Uploaded PCAP Files
+# ==============================
+
+backend/api/uploads/
+
+# ==============================
+# Global Generated Files
+# ==============================
+
 *.pcap
 *.json
+*.log
 
-# ===== Demo Sample PCAP =====
+# ==============================
+# Keep Only Official Sample
+# ==============================
+
 backend/data/*
 !backend/data/sample.pcap
 
-# ===== Node / Next =====
+# ==============================
+# Node / Next.js
+# ==============================
+
+backend/api/node_modules/
 dashboard/node_modules/
 dashboard/.next/
 dashboard/out/
 
-# ===== Environment Files =====
+# ==============================
+# Environment Files
+# ==============================
+
 .env
 .env.local
 
-# ===== macOS =====
+# ==============================
+# macOS
+# ==============================
+
 .DS_Store
