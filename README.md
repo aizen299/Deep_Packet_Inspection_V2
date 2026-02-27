@@ -250,7 +250,7 @@ Packet_analyzer/
 │   ├── Dockerfile
 │   └── build.sh
 │
-├── frontend/
+├── dashboard/
 │   ├── Dockerfile
 │   └── src/
 │
