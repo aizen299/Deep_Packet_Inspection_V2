@@ -1,0 +1,11 @@
+# C++
+backend/dpi_engine
+backend/*.pcap
+backend/stats.json
+
+# Node
+dashboard/node_modules
+dashboard/.next
+
+# macOS
+.DS_Store

@@ -5,10 +5,6 @@
 
 namespace DPI {
 
-// ============================================================================
-// FastPathProcessor Implementation
-// ============================================================================
-
 FastPathProcessor::FastPathProcessor(int fp_id,
                                      RuleManager* rule_manager,
                                      PacketOutputCallback output_callback)
@@ -48,26 +44,21 @@ void FastPathProcessor::stop() {
 
 void FastPathProcessor::run() {
     while (running_) {
-        // Get packet from input queue
         auto job_opt = input_queue_.popWithTimeout(std::chrono::milliseconds(100));
         
         if (!job_opt) {
-            // Periodically cleanup stale connections
             conn_tracker_.cleanupStale(std::chrono::seconds(300));
             continue;
         }
         
         packets_processed_++;
         
-        // Process the packet
         PacketAction action = processPacket(*job_opt);
         
-        // Call output callback
         if (output_callback_) {
             output_callback_(*job_opt, action);
         }
         
-        // Update stats
         if (action == PacketAction::DROP) {
             packets_dropped_++;
         } else {
@@ -77,33 +68,26 @@ void FastPathProcessor::run() {
 }
 
 PacketAction FastPathProcessor::processPacket(PacketJob& job) {
-    // Get or create connection
     Connection* conn = conn_tracker_.getOrCreateConnection(job.tuple);
     if (!conn) {
-        // Should not happen, but handle gracefully
         return PacketAction::FORWARD;
     }
     
-    // Update connection stats
-    bool is_outbound = true;  // In this model, all packets from user are outbound
+    bool is_outbound = true;
     conn_tracker_.updateConnection(conn, job.data.size(), is_outbound);
     
-    // Update TCP state if applicable
-    if (job.tuple.protocol == 6) {  // TCP
+    if (job.tuple.protocol == 6) {
         updateTCPState(conn, job.tcp_flags);
     }
     
-    // If connection is already blocked, drop immediately
     if (conn->state == ConnectionState::BLOCKED) {
         return PacketAction::DROP;
     }
     
-    // If connection not yet classified, try to inspect payload
     if (conn->state != ConnectionState::CLASSIFIED && job.payload_length > 0) {
         inspectPayload(job, conn);
     }
     
-    // Check rules (even for classified connections, as rules might change)
     return checkRules(job, conn);
 }
 
@@ -114,17 +98,14 @@ void FastPathProcessor::inspectPayload(PacketJob& job, Connection* conn) {
     
     const uint8_t* payload = job.data.data() + job.payload_offset;
     
-    // Try TLS SNI extraction first (most common for HTTPS)
     if (tryExtractSNI(job, conn)) {
         return;
     }
     
-    // Try HTTP Host header extraction
     if (tryExtractHTTPHost(job, conn)) {
         return;
     }
     
-    // Check for DNS (port 53)
     if (job.tuple.dst_port == 53 || job.tuple.src_port == 53) {
         auto domain = DNSExtractor::extractQuery(payload, job.payload_length);
         if (domain) {
@@ -133,7 +114,6 @@ void FastPathProcessor::inspectPayload(PacketJob& job, Connection* conn) {
         }
     }
     
-    // Basic port-based classification as fallback
     if (job.tuple.dst_port == 80) {
         conn_tracker_.classifyConnection(conn, AppType::HTTP, "");
     } else if (job.tuple.dst_port == 443) {
@@ -142,7 +122,6 @@ void FastPathProcessor::inspectPayload(PacketJob& job, Connection* conn) {
 }
 
 bool FastPathProcessor::tryExtractSNI(const PacketJob& job, Connection* conn) {
-    // Only for port 443 (HTTPS) or if it looks like TLS
     if (job.tuple.dst_port != 443 && job.payload_length < 50) {
         return false;
     }
@@ -156,7 +135,6 @@ bool FastPathProcessor::tryExtractSNI(const PacketJob& job, Connection* conn) {
     if (sni) {
         sni_extractions_++;
         
-        // Map SNI to app type
         AppType app = sniToAppType(*sni);
         conn_tracker_.classifyConnection(conn, app, *sni);
         
@@ -171,7 +149,6 @@ bool FastPathProcessor::tryExtractSNI(const PacketJob& job, Connection* conn) {
 }
 
 bool FastPathProcessor::tryExtractHTTPHost(const PacketJob& job, Connection* conn) {
-    // Only for port 80 (HTTP)
     if (job.tuple.dst_port != 80) {
         return false;
     }
@@ -201,10 +178,8 @@ PacketAction FastPathProcessor::checkRules(const PacketJob& job, Connection* con
         return PacketAction::FORWARD;
     }
     
-    // Parse source IP from tuple
     uint32_t src_ip = job.tuple.src_ip;
     
-    // Check blocking rules
     auto block_reason = rule_manager_->shouldBlock(
         src_ip,
         job.tuple.dst_port,
@@ -213,28 +188,26 @@ PacketAction FastPathProcessor::checkRules(const PacketJob& job, Connection* con
     );
     
     if (block_reason) {
-        // Log the block
         std::ostringstream ss;
         ss << "[FP" << fp_id_ << "] BLOCKED packet: ";
         
         switch (block_reason->type) {
-            case RuleManager::BlockReason::IP:
+            case RuleManager::BlockReason::IP_RULE:
                 ss << "IP " << block_reason->detail;
                 break;
-            case RuleManager::BlockReason::APP:
+            case RuleManager::BlockReason::APP_RULE:
                 ss << "App " << block_reason->detail;
                 break;
-            case RuleManager::BlockReason::DOMAIN:
+            case RuleManager::BlockReason::DOMAIN_RULE:
                 ss << "Domain " << block_reason->detail;
                 break;
-            case RuleManager::BlockReason::PORT:
+            case RuleManager::BlockReason::PORT_RULE:
                 ss << "Port " << block_reason->detail;
                 break;
         }
         
         std::cout << ss.str() << std::endl;
         
-        // Mark connection as blocked
         conn_tracker_.blockConnection(conn);
         
         return PacketAction::DROP;
@@ -287,15 +260,10 @@ FastPathProcessor::FPStats FastPathProcessor::getStats() const {
     return stats;
 }
 
-// ============================================================================
-// FPManager Implementation
-// ============================================================================
-
 FPManager::FPManager(int num_fps,
                      RuleManager* rule_manager,
                      PacketOutputCallback output_callback) {
     
-    // Create FP processors (each has its own input queue)
     for (int i = 0; i < num_fps; i++) {
         auto fp = std::make_unique<FastPathProcessor>(i, rule_manager, output_callback);
         fps_.push_back(std::move(fp));
@@ -315,7 +283,6 @@ void FPManager::startAll() {
 }
 
 void FPManager::stopAll() {
-    // Stop all FPs (they'll shutdown their own queues)
     for (auto& fp : fps_) {
         fp->stop();
     }
@@ -336,7 +303,6 @@ FPManager::AggregatedStats FPManager::getAggregatedStats() const {
 }
 
 std::string FPManager::generateClassificationReport() const {
-    // Aggregate app distribution across all FPs
     std::unordered_map<AppType, size_t> app_counts;
     std::unordered_map<std::string, size_t> domain_counts;
     size_t total_classified = 0;
@@ -377,7 +343,6 @@ std::string FPManager::generateClassificationReport() const {
     ss << "║                    APPLICATION DISTRIBUTION                   ║\n";
     ss << "╠══════════════════════════════════════════════════════════════╣\n";
     
-    // Sort apps by count
     std::vector<std::pair<AppType, size_t>> sorted_apps(
         app_counts.begin(), app_counts.end());
     std::sort(sorted_apps.begin(), sorted_apps.end(),
@@ -386,8 +351,7 @@ std::string FPManager::generateClassificationReport() const {
     for (const auto& pair : sorted_apps) {
         double pct = total > 0 ? (100.0 * pair.second / total) : 0;
         
-        // Create a simple bar graph
-        int bar_len = static_cast<int>(pct / 5);  // 20 chars max
+        int bar_len = static_cast<int>(pct / 5);
         std::string bar(bar_len, '#');
         
         ss << "║ " << std::setw(15) << std::left << appTypeToString(pair.first)
@@ -401,4 +365,4 @@ std::string FPManager::generateClassificationReport() const {
     return ss.str();
 }
 
-} // namespace DPI
+}

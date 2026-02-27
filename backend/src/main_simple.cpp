@@ -1,4 +1,3 @@
-// Simple single-threaded test version
 #include <iostream>
 #include "pcap_reader.h"
 #include "packet_parser.h"
@@ -39,22 +38,12 @@ int main(int argc, char* argv[]) {
                   << parsed.src_ip << ":" << parsed.src_port
                   << " -> " << parsed.dest_ip << ":" << parsed.dest_port;
         
-        // Try SNI extraction for HTTPS packets
-        if (parsed.has_tcp && parsed.dest_port == 443 && parsed.payload_length > 0) {
-            // Calculate payload offset
-            size_t payload_offset = 14;  // Ethernet
-            uint8_t ip_ihl = raw.data[14] & 0x0F;
-            payload_offset += ip_ihl * 4;
-            uint8_t tcp_offset = (raw.data[payload_offset + 12] >> 4) & 0x0F;
-            payload_offset += tcp_offset * 4;
-            
-            if (payload_offset < raw.data.size()) {
-                size_t payload_len = raw.data.size() - payload_offset;
-                auto sni = SNIExtractor::extract(raw.data.data() + payload_offset, payload_len);
-                if (sni) {
-                    std::cout << " [SNI: " << *sni << "]";
-                    tls_count++;
-                }
+        if (parsed.has_tcp && parsed.dest_port == 443 &&
+            parsed.payload_data != nullptr && parsed.payload_length > 0) {
+            auto sni = SNIExtractor::extract(parsed.payload_data, parsed.payload_length);
+            if (sni) {
+                std::cout << " [SNI: " << *sni << "]";
+                tls_count++;
             }
         }
         

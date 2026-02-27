@@ -57,6 +57,26 @@ def create_ip_header(src_ip, dst_ip, protocol, payload_len):
     return header
 
 
+def create_malformed_ip_packet(src_ip, dst_ip):
+    version_ihl = 0x46
+    tos = 0
+    total_len = 10
+    ident = random.randint(1, 65535)
+    flags_frag = 0x0000
+    ttl = 64
+    protocol = 6
+    checksum = 0
+
+    header = struct.pack('>BBHHHBBH',
+                         version_ihl, tos, total_len,
+                         ident, flags_frag,
+                         ttl, protocol, checksum)
+
+    header += bytes([int(x) for x in src_ip.split('.')])
+    header += bytes([int(x) for x in dst_ip.split('.')])
+    return header
+
+
 def create_tcp_header(src_port, dst_port, seq, ack, flags, payload_len=0):
     data_offset = 5 << 4  # 5 * 4 = 20 bytes
     window = 65535
@@ -74,6 +94,25 @@ def create_udp_header(src_port, dst_port, payload_len):
     length = 8 + payload_len
     checksum = 0
     return struct.pack('>HHHH', src_port, dst_port, length, checksum)
+
+
+def create_fragmented_ip_header(src_ip, dst_ip, protocol, payload_len):
+    version_ihl = 0x45
+    tos = 0
+    total_len = 20 + payload_len
+    ident = random.randint(1, 65535)
+    flags_frag = 0x2000
+    ttl = 64
+    checksum = 0
+
+    header = struct.pack('>BBHHHBBH',
+                         version_ihl, tos, total_len,
+                         ident, flags_frag,
+                         ttl, protocol, checksum)
+
+    header += bytes([int(x) for x in src_ip.split('.')])
+    header += bytes([int(x) for x in dst_ip.split('.')])
+    return header
 
 
 def create_tls_client_hello(sni):
@@ -254,6 +293,20 @@ def main():
         writer.write_packet(eth + ip + tcp)
         
         seq_base += 1000
+
+    malformed_ip = create_malformed_ip_packet(user_ip, '10.0.0.1')
+    eth = create_ethernet_header(user_mac, gateway_mac)
+    writer.write_packet(eth + malformed_ip)
+
+    dns_data = create_dns_query('malformed.test')
+    udp = create_udp_header(12345, 53, len(dns_data))
+    frag_ip = create_fragmented_ip_header(user_ip, '8.8.4.4', 17, len(udp) + len(dns_data))
+    writer.write_packet(eth + frag_ip + udp + dns_data)
+
+    truncated_tls = create_tls_client_hello('truncated.test')[:10]
+    tcp = create_tcp_header(55555, 443, 1, 0, 0x18)
+    ip = create_ip_header(user_ip, '1.1.1.1', 6, len(tcp) + len(truncated_tls))
+    writer.write_packet(eth + ip + tcp + truncated_tls)
     
     writer.close()
     print(f"Created test_dpi.pcap with test traffic")

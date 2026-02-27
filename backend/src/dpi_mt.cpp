@@ -1,5 +1,3 @@
-// Multi-threaded DPI Engine - Fixed Version
-// Architecture: Reader -> LB threads -> FP threads -> Output
 
 #include <iostream>
 #include <fstream>
@@ -25,9 +23,6 @@
 using namespace PacketAnalyzer;
 using namespace DPI;
 
-// =============================================================================
-// Thread-Safe Queue
-// =============================================================================
 template<typename T>
 class TSQueue {
 public:
@@ -77,9 +72,6 @@ private:
     std::atomic<bool> shutdown_;
 };
 
-// =============================================================================
-// Packet Job - Contains all packet data (self-contained, no pointers)
-// =============================================================================
 struct Packet {
     uint32_t id;
     uint32_t ts_sec;
@@ -91,9 +83,6 @@ struct Packet {
     size_t payload_length;
 };
 
-// =============================================================================
-// Flow Entry
-// =============================================================================
 struct FlowEntry {
     FiveTuple tuple;
     AppType app_type = AppType::UNKNOWN;
@@ -104,9 +93,6 @@ struct FlowEntry {
     bool classified = false;
 };
 
-// =============================================================================
-// Blocking Rules
-// =============================================================================
 class Rules {
 public:
     void blockIP(const std::string& ip) {
@@ -160,9 +146,6 @@ private:
     std::vector<std::string> blocked_domains_;
 };
 
-// =============================================================================
-// Statistics (thread-safe)
-// =============================================================================
 struct Stats {
     std::atomic<uint64_t> total_packets{0};
     std::atomic<uint64_t> total_bytes{0};
@@ -171,7 +154,6 @@ struct Stats {
     std::atomic<uint64_t> tcp_packets{0};
     std::atomic<uint64_t> udp_packets{0};
     
-    // Per-app stats (protected by mutex)
     std::mutex app_mutex;
     std::unordered_map<AppType, uint64_t> app_counts;
     std::unordered_map<std::string, AppType> detected_snis;
@@ -185,9 +167,6 @@ struct Stats {
     }
 };
 
-// =============================================================================
-// Fast Path Processor (one per FP thread)
-// =============================================================================
 class FastPath {
 public:
     FastPath(int id, Rules* rules, Stats* stats, TSQueue<Packet>* output_queue)
@@ -228,7 +207,6 @@ private:
             processed_++;
             Packet& pkt = *pkt_opt;
             
-            // Get or create flow
             FlowEntry& flow = flows_[pkt.tuple];
             if (flow.packets == 0) {
                 flow.tuple = pkt.tuple;
@@ -236,20 +214,16 @@ private:
             flow.packets++;
             flow.bytes += pkt.data.size();
             
-            // Try to classify if not done yet
             if (!flow.classified) {
                 classifyFlow(pkt, flow);
             }
             
-            // Check blocking
             if (!flow.blocked) {
                 flow.blocked = rules_->isBlocked(pkt.tuple.src_ip, flow.app_type, flow.sni);
             }
             
-            // Record stats
             stats_->recordApp(flow.app_type, flow.sni);
             
-            // Forward or drop
             if (flow.blocked) {
                 stats_->dropped++;
             } else {
@@ -260,7 +234,6 @@ private:
     }
     
     void classifyFlow(Packet& pkt, FlowEntry& flow) {
-        // Try SNI extraction for HTTPS
         if (pkt.tuple.dst_port == 443 && pkt.payload_length > 5) {
             const uint8_t* payload = pkt.data.data() + pkt.payload_offset;
             auto sni = SNIExtractor::extract(payload, pkt.payload_length);
@@ -272,7 +245,6 @@ private:
             }
         }
         
-        // Try HTTP Host extraction
         if (pkt.tuple.dst_port == 80 && pkt.payload_length > 10) {
             const uint8_t* payload = pkt.data.data() + pkt.payload_offset;
             auto host = HTTPHostExtractor::extract(payload, pkt.payload_length);
@@ -284,14 +256,12 @@ private:
             }
         }
         
-        // DNS
         if (pkt.tuple.dst_port == 53 || pkt.tuple.src_port == 53) {
             flow.app_type = AppType::DNS;
             flow.classified = true;
             return;
         }
         
-        // Port-based fallback (but don't mark as classified - might get SNI later)
         if (pkt.tuple.dst_port == 443) {
             flow.app_type = AppType::HTTPS;
         } else if (pkt.tuple.dst_port == 80) {
@@ -300,9 +270,6 @@ private:
     }
 };
 
-// =============================================================================
-// Load Balancer (one per LB thread)
-// =============================================================================
 class LoadBalancer {
 public:
     LoadBalancer(int id, std::vector<FastPath*> fps)
@@ -338,7 +305,6 @@ private:
             auto pkt_opt = input_queue_.pop(100);
             if (!pkt_opt) continue;
             
-            // Hash to select FP
             FiveTupleHash hasher;
             size_t fp_idx = hasher(pkt_opt->tuple) % num_fps_;
             
@@ -348,9 +314,6 @@ private:
     }
 };
 
-// =============================================================================
-// DPI Engine
-// =============================================================================
 class DPIEngine {
 public:
     struct Config {
@@ -370,12 +333,10 @@ public:
                   << "    Total FPs: " << std::setw(2) << total_fps << "     ║\n";
         std::cout << "╚══════════════════════════════════════════════════════════════╝\n\n";
         
-        // Create FP threads
         for (int i = 0; i < total_fps; i++) {
             fps_.push_back(std::make_unique<FastPath>(i, &rules_, &stats_, &output_queue_));
         }
         
-        // Create LB threads, each managing a subset of FPs
         for (int lb = 0; lb < cfg.num_lbs; lb++) {
             std::vector<FastPath*> lb_fps;
             int start = lb * cfg.fps_per_lb;
@@ -389,28 +350,24 @@ public:
     void blockIP(const std::string& ip) { rules_.blockIP(ip); }
     void blockApp(const std::string& app) { rules_.blockApp(app); }
     void blockDomain(const std::string& dom) { rules_.blockDomain(dom); }
+    void setJsonOutput(const std::string& path) { json_path_ = path; }
     
     bool process(const std::string& input_file, const std::string& output_file) {
-        // Open input
         PcapReader reader;
         if (!reader.open(input_file)) return false;
         
-        // Open output
         std::ofstream output(output_file, std::ios::binary);
         if (!output.is_open()) {
             std::cerr << "Cannot open output file\n";
             return false;
         }
         
-        // Write PCAP header
         const auto& hdr = reader.getGlobalHeader();
         output.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
         
-        // Start all threads
         for (auto& fp : fps_) fp->start();
         for (auto& lb : lbs_) lb->start();
         
-        // Start output writer thread
         std::atomic<bool> output_running{true};
         std::thread output_thread([&]() {
             while (output_running || output_queue_.size() > 0) {
@@ -428,7 +385,6 @@ public:
             }
         });
         
-        // Read and dispatch packets
         std::cout << "[Reader] Processing packets...\n";
         RawPacket raw;
         ParsedPacket parsed;
@@ -438,7 +394,6 @@ public:
             if (!PacketParser::parse(raw, parsed)) continue;
             if (!parsed.has_ip || (!parsed.has_tcp && !parsed.has_udp)) continue;
             
-            // Create packet
             Packet pkt;
             pkt.id = pkt_id++;
             pkt.ts_sec = raw.header.ts_sec;
@@ -446,7 +401,6 @@ public:
             pkt.tcp_flags = parsed.tcp_flags;
             pkt.data = std::move(raw.data);
             
-            // Parse 5-tuple
             auto parseIP = [](const std::string& ip) -> uint32_t {
                 uint32_t result = 0;
                 int octet = 0, shift = 0;
@@ -463,8 +417,7 @@ public:
             pkt.tuple.dst_port = parsed.dest_port;
             pkt.tuple.protocol = parsed.protocol;
             
-            // Calculate payload offset
-            pkt.payload_offset = 14;  // Ethernet
+            pkt.payload_offset = 14;
             if (pkt.data.size() > 14) {
                 uint8_t ip_ihl = pkt.data[14] & 0x0F;
                 pkt.payload_offset += ip_ihl * 4;
@@ -483,13 +436,11 @@ public:
                 }
             }
             
-            // Update stats
             stats_.total_packets++;
             stats_.total_bytes += pkt.data.size();
             if (parsed.has_tcp) stats_.tcp_packets++;
             else if (parsed.has_udp) stats_.udp_packets++;
             
-            // Dispatch to LB (hash-based)
             FiveTupleHash hasher;
             size_t lb_idx = hasher(pkt.tuple) % lbs_.size();
             lbs_[lb_idx]->queue().push(std::move(pkt));
@@ -498,10 +449,8 @@ public:
         std::cout << "[Reader] Done reading " << pkt_id << " packets\n";
         reader.close();
         
-        // Wait for queues to drain
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
-        // Stop all threads
         for (auto& lb : lbs_) lb->stop();
         for (auto& fp : fps_) fp->stop();
         
@@ -511,8 +460,8 @@ public:
         
         output.close();
         
-        // Print report
         printReport();
+        writeJson();
         
         return true;
     }
@@ -524,6 +473,56 @@ private:
     TSQueue<Packet> output_queue_;
     std::vector<std::unique_ptr<FastPath>> fps_;
     std::vector<std::unique_ptr<LoadBalancer>> lbs_;
+    std::string json_path_;
+    
+void writeJson() {
+    if (json_path_.empty()) return;
+    std::ofstream out(json_path_);
+    if (!out.is_open()) return;
+
+    out << "{\n";
+
+    out << "  \"summary\": {\n";
+    out << "    \"total_packets\": " << stats_.total_packets.load() << ",\n";
+    out << "    \"total_bytes\": " << stats_.total_bytes.load() << ",\n";
+    out << "    \"tcp_packets\": " << stats_.tcp_packets.load() << ",\n";
+    out << "    \"udp_packets\": " << stats_.udp_packets.load() << ",\n";
+    out << "    \"forwarded\": " << stats_.forwarded.load() << ",\n";
+    out << "    \"dropped\": " << stats_.dropped.load() << "\n";
+    out << "  },\n";
+
+    out << "  \"applications\": {\n";
+    {
+        std::lock_guard<std::mutex> lock(stats_.app_mutex);
+        bool first = true;
+        for (const auto& [app, count] : stats_.app_counts) {
+            if (!first) out << ",\n";
+            first = false;
+            out << "    \"" << appTypeToString(app) << "\": " << count;
+        }
+    }
+    out << "\n  },\n";
+
+    out << "  \"threads\": {\n";
+    out << "    \"load_balancers\": {\n";
+    for (size_t i = 0; i < lbs_.size(); i++) {
+        out << "      \"lb" << i << "\": " << lbs_[i]->dispatched();
+        if (i < lbs_.size() - 1) out << ",";
+        out << "\n";
+    }
+    out << "    },\n";
+
+    out << "    \"fast_paths\": {\n";
+    for (size_t i = 0; i < fps_.size(); i++) {
+        out << "      \"fp" << i << "\": " << fps_[i]->processed();
+        if (i < fps_.size() - 1) out << ",";
+        out << "\n";
+    }
+    out << "    }\n";
+    out << "  }\n";
+
+    out << "}\n";
+}
     
     void printReport() {
         std::cout << "\n";
@@ -538,7 +537,6 @@ private:
         std::cout << "║ Forwarded:          " << std::setw(12) << stats_.forwarded.load() << "                           ║\n";
         std::cout << "║ Dropped:            " << std::setw(12) << stats_.dropped.load() << "                           ║\n";
         
-        // Thread stats
         std::cout << "╠══════════════════════════════════════════════════════════════╣\n";
         std::cout << "║ THREAD STATISTICS                                             ║\n";
         for (size_t i = 0; i < lbs_.size(); i++) {
@@ -548,7 +546,6 @@ private:
             std::cout << "║   FP" << i << " processed:    " << std::setw(12) << fps_[i]->processed() << "                           ║\n";
         }
         
-        // App distribution
         std::cout << "╠══════════════════════════════════════════════════════════════╣\n";
         std::cout << "║                   APPLICATION BREAKDOWN                       ║\n";
         std::cout << "╠══════════════════════════════════════════════════════════════╣\n";
@@ -574,7 +571,6 @@ private:
         
         std::cout << "╚══════════════════════════════════════════════════════════════╝\n";
         
-        // Detected SNIs
         if (!stats_.detected_snis.empty()) {
             std::cout << "\n[Detected Domains/SNIs]\n";
             for (const auto& [sni, app] : stats_.detected_snis) {
@@ -584,9 +580,6 @@ private:
     }
 };
 
-// =============================================================================
-// Main
-// =============================================================================
 void printUsage(const char* prog) {
     std::cout << R"(
 DPI Engine v2.0 - Multi-threaded Deep Packet Inspection
@@ -616,6 +609,7 @@ int main(int argc, char* argv[]) {
     std::string output = argv[2];
     
     DPIEngine::Config cfg;
+    std::string json_output;
     std::vector<std::string> block_ips, block_apps, block_domains;
     
     for (int i = 3; i < argc; i++) {
@@ -625,9 +619,11 @@ int main(int argc, char* argv[]) {
         else if (arg == "--block-domain" && i + 1 < argc) block_domains.push_back(argv[++i]);
         else if (arg == "--lbs" && i + 1 < argc) cfg.num_lbs = std::stoi(argv[++i]);
         else if (arg == "--fps" && i + 1 < argc) cfg.fps_per_lb = std::stoi(argv[++i]);
+        else if (arg == "--json" && i + 1 < argc) json_output = argv[++i];
     }
     
     DPIEngine engine(cfg);
+    if (!json_output.empty()) engine.setJsonOutput(json_output);
     
     for (const auto& ip : block_ips) engine.blockIP(ip);
     for (const auto& app : block_apps) engine.blockApp(app);

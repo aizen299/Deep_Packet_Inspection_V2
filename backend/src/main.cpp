@@ -7,7 +7,6 @@
 using namespace PacketAnalyzer;
 
 void printPacketSummary(const ParsedPacket& pkt, int packet_num) {
-    // Format timestamp
     std::time_t time = pkt.timestamp_sec;
     std::tm* tm = std::localtime(&time);
     
@@ -15,7 +14,6 @@ void printPacketSummary(const ParsedPacket& pkt, int packet_num) {
     std::cout << "Time: " << std::put_time(tm, "%Y-%m-%d %H:%M:%S") 
               << "." << std::setfill('0') << std::setw(6) << pkt.timestamp_usec << "\n";
     
-    // Ethernet layer
     std::cout << "\n[Ethernet]\n";
     std::cout << "  Source MAC:      " << pkt.src_mac << "\n";
     std::cout << "  Destination MAC: " << pkt.dest_mac << "\n";
@@ -31,7 +29,6 @@ void printPacketSummary(const ParsedPacket& pkt, int packet_num) {
     }
     std::cout << "\n";
     
-    // IP layer
     if (pkt.has_ip) {
         std::cout << "\n[IPv" << static_cast<int>(pkt.ip_version) << "]\n";
         std::cout << "  Source IP:      " << pkt.src_ip << "\n";
@@ -40,7 +37,6 @@ void printPacketSummary(const ParsedPacket& pkt, int packet_num) {
         std::cout << "  TTL:            " << static_cast<int>(pkt.ttl) << "\n";
     }
     
-    // TCP layer
     if (pkt.has_tcp) {
         std::cout << "\n[TCP]\n";
         std::cout << "  Source Port:      " << pkt.src_port << "\n";
@@ -50,19 +46,16 @@ void printPacketSummary(const ParsedPacket& pkt, int packet_num) {
         std::cout << "  Flags:            " << PacketParser::tcpFlagsToString(pkt.tcp_flags) << "\n";
     }
     
-    // UDP layer
     if (pkt.has_udp) {
         std::cout << "\n[UDP]\n";
         std::cout << "  Source Port:      " << pkt.src_port << "\n";
         std::cout << "  Destination Port: " << pkt.dest_port << "\n";
     }
     
-    // Payload info
     if (pkt.payload_length > 0) {
         std::cout << "\n[Payload]\n";
         std::cout << "  Length: " << pkt.payload_length << " bytes\n";
         
-        // Print first 32 bytes of payload as hex (if present)
         std::cout << "  Preview: ";
         size_t preview_len = std::min(pkt.payload_length, static_cast<size_t>(32));
         for (size_t i = 0; i < preview_len; i++) {
@@ -91,20 +84,18 @@ int main(int argc, char* argv[]) {
     std::cout << "     Packet Analyzer v1.0\n";
     std::cout << "====================================\n\n";
     
-    // Check command line arguments
     if (argc < 2) {
         printUsage(argv[0]);
         return 1;
     }
     
     std::string filename = argv[1];
-    int max_packets = -1;  // -1 means no limit
+    int max_packets = -1;
     
     if (argc >= 3) {
         max_packets = std::stoi(argv[2]);
     }
     
-    // Open the PCAP file
     PcapReader reader;
     if (!reader.open(filename)) {
         return 1;
@@ -112,7 +103,6 @@ int main(int argc, char* argv[]) {
     
     std::cout << "\n--- Reading packets ---\n";
     
-    // Read and parse packets
     RawPacket raw_packet;
     ParsedPacket parsed_packet;
     int packet_count = 0;
@@ -128,14 +118,12 @@ int main(int argc, char* argv[]) {
             parse_errors++;
         }
         
-        // Check if we've reached the limit
         if (max_packets > 0 && packet_count >= max_packets) {
             std::cout << "\n(Stopped after " << max_packets << " packets)\n";
             break;
         }
     }
     
-    // Summary
     std::cout << "\n====================================\n";
     std::cout << "Summary:\n";
     std::cout << "  Total packets read:  " << packet_count << "\n";

@@ -6,9 +6,6 @@
 
 namespace DPI {
 
-// ============================================================================
-// ConnectionTracker Implementation
-// ============================================================================
 
 ConnectionTracker::ConnectionTracker(int fp_id, size_t max_connections)
     : fp_id_(fp_id), max_connections_(max_connections) {
@@ -18,15 +15,15 @@ Connection* ConnectionTracker::getOrCreateConnection(const FiveTuple& tuple) {
     auto it = connections_.find(tuple);
     
     if (it != connections_.end()) {
+        touchLRU(tuple);
         return &it->second;
     }
     
-    // Check if we need to evict old connections
+
     if (connections_.size() >= max_connections_) {
         evictOldest();
     }
-    
-    // Create new connection
+
     Connection conn;
     conn.tuple = tuple;
     conn.state = ConnectionState::NEW;
@@ -35,6 +32,9 @@ Connection* ConnectionTracker::getOrCreateConnection(const FiveTuple& tuple) {
     
     auto result = connections_.emplace(tuple, std::move(conn));
     total_seen_++;
+    
+    lru_list_.push_front(tuple);
+    lru_index_[tuple] = lru_list_.begin();
     
     return &result.first->second;
 }
@@ -45,7 +45,7 @@ Connection* ConnectionTracker::getConnection(const FiveTuple& tuple) {
         return &it->second;
     }
     
-    // Try reverse tuple (for bidirectional matching)
+
     auto rev = connections_.find(tuple.reverse());
     if (rev != connections_.end()) {
         return &rev->second;
@@ -66,6 +66,17 @@ void ConnectionTracker::updateConnection(Connection* conn, size_t packet_size, b
         conn->packets_in++;
         conn->bytes_in += packet_size;
     }
+
+    touchLRU(conn->tuple);
+
+    uint64_t total_packets = conn->packets_in + conn->packets_out;
+    if (total_packets > 0) {
+        uint64_t total_bytes = conn->bytes_in + conn->bytes_out;
+        conn->average_packet_size = static_cast<double>(total_bytes) / total_packets;
+    }
+
+    conn->last_activity_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        conn->last_seen.time_since_epoch()).count();
 }
 
 void ConnectionTracker::classifyConnection(Connection* conn, AppType app, const std::string& sni) {
@@ -91,6 +102,8 @@ void ConnectionTracker::closeConnection(const FiveTuple& tuple) {
     auto it = connections_.find(tuple);
     if (it != connections_.end()) {
         it->second.state = ConnectionState::CLOSED;
+        removeFromLRU(tuple);
+        closed_count_++;
     }
 }
 
@@ -101,8 +114,9 @@ size_t ConnectionTracker::cleanupStale(std::chrono::seconds timeout) {
     for (auto it = connections_.begin(); it != connections_.end(); ) {
         auto age = std::chrono::duration_cast<std::chrono::seconds>(
             now - it->second.last_seen);
-        
+
         if (age > timeout || it->second.state == ConnectionState::CLOSED) {
+            removeFromLRU(it->first);
             it = connections_.erase(it);
             removed++;
         } else {
@@ -134,11 +148,17 @@ ConnectionTracker::TrackerStats ConnectionTracker::getStats() const {
     stats.total_connections_seen = total_seen_;
     stats.classified_connections = classified_count_;
     stats.blocked_connections = blocked_count_;
+    stats.evicted_connections = evicted_count_;
+    stats.closed_connections = closed_count_;
+    stats.load_factor = connections_.empty() ? 0.0 :
+        static_cast<double>(connections_.size()) / max_connections_;
     return stats;
 }
 
 void ConnectionTracker::clear() {
     connections_.clear();
+    lru_list_.clear();
+    lru_index_.clear();
 }
 
 void ConnectionTracker::forEach(std::function<void(const Connection&)> callback) const {
@@ -148,22 +168,36 @@ void ConnectionTracker::forEach(std::function<void(const Connection&)> callback)
 }
 
 void ConnectionTracker::evictOldest() {
-    if (connections_.empty()) return;
-    
-    // Find oldest connection
-    auto oldest = connections_.begin();
-    for (auto it = connections_.begin(); it != connections_.end(); ++it) {
-        if (it->second.last_seen < oldest->second.last_seen) {
-            oldest = it;
-        }
+    if (lru_list_.empty()) return;
+
+    FiveTuple oldest_tuple = lru_list_.back();
+    lru_list_.pop_back();
+    lru_index_.erase(oldest_tuple);
+
+    auto it = connections_.find(oldest_tuple);
+    if (it != connections_.end()) {
+        connections_.erase(it);
+        evicted_count_++;
     }
-    
-    connections_.erase(oldest);
 }
 
-// ============================================================================
-// GlobalConnectionTable Implementation
-// ============================================================================
+void ConnectionTracker::touchLRU(const FiveTuple& tuple) {
+    auto it = lru_index_.find(tuple);
+    if (it == lru_index_.end()) return;
+
+    lru_list_.erase(it->second);
+    lru_list_.push_front(tuple);
+    lru_index_[tuple] = lru_list_.begin();
+}
+
+void ConnectionTracker::removeFromLRU(const FiveTuple& tuple) {
+    auto it = lru_index_.find(tuple);
+    if (it == lru_index_.end()) return;
+
+    lru_list_.erase(it->second);
+    lru_index_.erase(it);
+}
+
 
 GlobalConnectionTable::GlobalConnectionTable(size_t num_fps) {
     trackers_.resize(num_fps, nullptr);
@@ -192,7 +226,7 @@ GlobalConnectionTable::GlobalStats GlobalConnectionTable::getGlobalStats() const
         stats.total_active_connections += tracker_stats.active_connections;
         stats.total_connections_seen += tracker_stats.total_connections_seen;
         
-        // Collect app distribution
+        
         tracker->forEach([&](const Connection& conn) {
             stats.app_distribution[conn.app_type]++;
             if (!conn.sni.empty()) {
@@ -201,14 +235,14 @@ GlobalConnectionTable::GlobalStats GlobalConnectionTable::getGlobalStats() const
         });
     }
     
-    // Get top domains
+    
     std::vector<std::pair<std::string, size_t>> domain_vec(
         domain_counts.begin(), domain_counts.end());
     
     std::sort(domain_vec.begin(), domain_vec.end(),
               [](const auto& a, const auto& b) { return a.second > b.second; });
     
-    // Take top 20
+    
     size_t count = std::min(domain_vec.size(), static_cast<size_t>(20));
     stats.top_domains.assign(domain_vec.begin(), domain_vec.begin() + count);
     
@@ -230,13 +264,13 @@ std::string GlobalConnectionTable::generateReport() const {
     ss << "║                    APPLICATION BREAKDOWN                      ║\n";
     ss << "╠══════════════════════════════════════════════════════════════╣\n";
     
-    // Calculate total for percentages
+    
     size_t total = 0;
     for (const auto& pair : stats.app_distribution) {
         total += pair.second;
     }
     
-    // Sort by count
+    
     std::vector<std::pair<AppType, size_t>> sorted_apps(
         stats.app_distribution.begin(), stats.app_distribution.end());
     std::sort(sorted_apps.begin(), sorted_apps.end(),
@@ -269,4 +303,4 @@ std::string GlobalConnectionTable::generateReport() const {
     return ss.str();
 }
 
-} // namespace DPI
+}

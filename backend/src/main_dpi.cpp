@@ -81,7 +81,6 @@ int main(int argc, char* argv[]) {
     std::string input_file = argv[1];
     std::string output_file = argv[2];
     
-    // Parse options
     DPIEngine::Config config;
     config.num_load_balancers = 2;
     config.fps_per_lb = 2;
@@ -114,21 +113,17 @@ int main(int argc, char* argv[]) {
         }
     }
     
-    // Create DPI engine
     DPIEngine engine(config);
     
-    // Initialize
     if (!engine.initialize()) {
         std::cerr << "Failed to initialize DPI engine\n";
         return 1;
     }
     
-    // Load rules from file if specified
     if (!rules_file.empty()) {
         engine.loadRules(rules_file);
     }
     
-    // Apply command-line blocking rules
     for (const auto& ip : block_ips) {
         engine.blockIP(ip);
     }
@@ -141,7 +136,6 @@ int main(int argc, char* argv[]) {
         engine.blockDomain(domain);
     }
     
-    // Process the file
     if (!engine.processFile(input_file, output_file)) {
         std::cerr << "Failed to process file\n";
         return 1;

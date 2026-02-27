@@ -1,4 +1,3 @@
-// Working DPI Engine - Simplified but functional
 #include <iostream>
 #include <fstream>
 #include <unordered_map>
@@ -15,7 +14,6 @@
 using namespace PacketAnalyzer;
 using namespace DPI;
 
-// Simplified connection tracking
 struct Flow {
     FiveTuple tuple;
     AppType app_type = AppType::UNKNOWN;
@@ -25,12 +23,11 @@ struct Flow {
     bool blocked = false;
 };
 
-// Blocking rules
 class BlockingRules {
 public:
     std::unordered_set<uint32_t> blocked_ips;
     std::unordered_set<AppType> blocked_apps;
-    std::vector<std::string> blocked_domains;  // Simple substring match
+    std::vector<std::string> blocked_domains;
     
     void blockIP(const std::string& ip) {
         uint32_t addr = parseIP(ip);
@@ -103,7 +100,6 @@ int main(int argc, char* argv[]) {
     
     BlockingRules rules;
     
-    // Parse options
     for (int i = 3; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--block-ip" && i + 1 < argc) {
@@ -120,27 +116,22 @@ int main(int argc, char* argv[]) {
     std::cout << "║                    DPI ENGINE v1.0                            ║\n";
     std::cout << "╚══════════════════════════════════════════════════════════════╝\n\n";
     
-    // Open input
     PcapReader reader;
     if (!reader.open(input_file)) {
         return 1;
     }
     
-    // Open output
     std::ofstream output(output_file, std::ios::binary);
     if (!output.is_open()) {
         std::cerr << "Error: Cannot open output file\n";
         return 1;
     }
     
-    // Write PCAP header
     const auto& header = reader.getGlobalHeader();
     output.write(reinterpret_cast<const char*>(&header), sizeof(header));
     
-    // Flow table
     std::unordered_map<FiveTuple, Flow, FiveTupleHash> flows;
     
-    // Statistics
     uint64_t total_packets = 0;
     uint64_t forwarded = 0;
     uint64_t dropped = 0;
@@ -157,7 +148,6 @@ int main(int argc, char* argv[]) {
         if (!PacketParser::parse(raw, parsed)) continue;
         if (!parsed.has_ip || (!parsed.has_tcp && !parsed.has_udp)) continue;
         
-        // Create five-tuple
         FiveTuple tuple;
         auto parseIP = [](const std::string& ip) -> uint32_t {
             uint32_t result = 0;
@@ -175,7 +165,6 @@ int main(int argc, char* argv[]) {
         tuple.dst_port = parsed.dest_port;
         tuple.protocol = parsed.protocol;
         
-        // Get or create flow
         Flow& flow = flows[tuple];
         if (flow.packets == 0) {
             flow.tuple = tuple;
@@ -183,67 +172,38 @@ int main(int argc, char* argv[]) {
         flow.packets++;
         flow.bytes += raw.data.size();
         
-        // Try SNI extraction - even for flows already marked as generic HTTPS
-        if ((flow.app_type == AppType::UNKNOWN || flow.app_type == AppType::HTTPS) && 
-            flow.sni.empty() && parsed.has_tcp && parsed.dest_port == 443) {
-            
-            size_t payload_offset = 14;
-            uint8_t ip_ihl = raw.data[14] & 0x0F;
-            payload_offset += ip_ihl * 4;
-            
-            if (payload_offset + 12 < raw.data.size()) {
-                uint8_t tcp_offset = (raw.data[payload_offset + 12] >> 4) & 0x0F;
-                payload_offset += tcp_offset * 4;
-                
-                if (payload_offset < raw.data.size()) {
-                    size_t payload_len = raw.data.size() - payload_offset;
-                    if (payload_len > 5) {  // Minimum TLS record header
-                        auto sni = SNIExtractor::extract(raw.data.data() + payload_offset, payload_len);
-                        if (sni) {
-                            flow.sni = *sni;
-                            flow.app_type = sniToAppType(*sni);
-                        }
-                    }
-                }
+        if ((flow.app_type == AppType::UNKNOWN || flow.app_type == AppType::HTTPS) &&
+            flow.sni.empty() && parsed.has_tcp && parsed.dest_port == 443 &&
+            parsed.payload_data != nullptr && parsed.payload_length > 5) {
+
+            auto sni = SNIExtractor::extract(parsed.payload_data, parsed.payload_length);
+            if (sni) {
+                flow.sni = *sni;
+                flow.app_type = sniToAppType(*sni);
             }
         }
         
-        // HTTP Host extraction
         if ((flow.app_type == AppType::UNKNOWN || flow.app_type == AppType::HTTP) &&
-            flow.sni.empty() && parsed.has_tcp && parsed.dest_port == 80) {
-            
-            size_t payload_offset = 14;
-            uint8_t ip_ihl = raw.data[14] & 0x0F;
-            payload_offset += ip_ihl * 4;
-            
-            if (payload_offset + 12 < raw.data.size()) {
-                uint8_t tcp_offset = (raw.data[payload_offset + 12] >> 4) & 0x0F;
-                payload_offset += tcp_offset * 4;
-                
-                if (payload_offset < raw.data.size()) {
-                    size_t payload_len = raw.data.size() - payload_offset;
-                    auto host = HTTPHostExtractor::extract(raw.data.data() + payload_offset, payload_len);
-                    if (host) {
-                        flow.sni = *host;
-                        flow.app_type = sniToAppType(*host);
-                    }
-                }
+            flow.sni.empty() && parsed.has_tcp && parsed.dest_port == 80 &&
+            parsed.payload_data != nullptr && parsed.payload_length > 0) {
+
+            auto host = HTTPHostExtractor::extract(parsed.payload_data, parsed.payload_length);
+            if (host) {
+                flow.sni = *host;
+                flow.app_type = sniToAppType(*host);
             }
         }
         
-        // DNS classification
         if (flow.app_type == AppType::UNKNOWN && 
             (parsed.dest_port == 53 || parsed.src_port == 53)) {
             flow.app_type = AppType::DNS;
         }
         
-        // Port-based fallback
         if (flow.app_type == AppType::UNKNOWN) {
             if (parsed.dest_port == 443) flow.app_type = AppType::HTTPS;
             else if (parsed.dest_port == 80) flow.app_type = AppType::HTTP;
         }
         
-        // Check blocking rules
         if (!flow.blocked) {
             flow.blocked = rules.isBlocked(tuple.src_ip, flow.app_type, flow.sni);
             if (flow.blocked) {
@@ -254,15 +214,12 @@ int main(int argc, char* argv[]) {
             }
         }
         
-        // Update app stats
         app_stats[flow.app_type]++;
         
-        // Forward or drop
         if (flow.blocked) {
             dropped++;
         } else {
             forwarded++;
-            // Write to output
             PcapPacketHeader pkt_hdr;
             pkt_hdr.ts_sec = raw.header.ts_sec;
             pkt_hdr.ts_usec = raw.header.ts_usec;
@@ -276,7 +233,6 @@ int main(int argc, char* argv[]) {
     reader.close();
     output.close();
     
-    // Print report
     std::cout << "\n";
     std::cout << "╔══════════════════════════════════════════════════════════════╗\n";
     std::cout << "║                      PROCESSING REPORT                       ║\n";
@@ -289,7 +245,6 @@ int main(int argc, char* argv[]) {
     std::cout << "║                    APPLICATION BREAKDOWN                     ║\n";
     std::cout << "╠══════════════════════════════════════════════════════════════╣\n";
     
-    // Sort by count
     std::vector<std::pair<AppType, uint64_t>> sorted_apps(app_stats.begin(), app_stats.end());
     std::sort(sorted_apps.begin(), sorted_apps.end(),
               [](const auto& a, const auto& b) { return a.second > b.second; });
@@ -307,7 +262,6 @@ int main(int argc, char* argv[]) {
     
     std::cout << "╚══════════════════════════════════════════════════════════════╝\n";
     
-    // List unique SNIs
     std::cout << "\n[Detected Applications/Domains]\n";
     std::unordered_map<std::string, AppType> unique_snis;
     for (const auto& [tuple, flow] : flows) {

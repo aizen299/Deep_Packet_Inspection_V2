@@ -6,10 +6,6 @@
 
 namespace DPI {
 
-// ============================================================================
-// IP Blocking
-// ============================================================================
-
 uint32_t RuleManager::parseIP(const std::string& ip) {
     uint32_t result = 0;
     int octet = 0;
@@ -72,10 +68,6 @@ std::vector<std::string> RuleManager::getBlockedIPs() const {
     return result;
 }
 
-// ============================================================================
-// Application Blocking
-// ============================================================================
-
 void RuleManager::blockApp(AppType app) {
     std::unique_lock<std::shared_mutex> lock(app_mutex_);
     blocked_apps_.insert(app);
@@ -97,10 +89,6 @@ std::vector<AppType> RuleManager::getBlockedApps() const {
     std::shared_lock<std::shared_mutex> lock(app_mutex_);
     return std::vector<AppType>(blocked_apps_.begin(), blocked_apps_.end());
 }
-
-// ============================================================================
-// Domain Blocking
-// ============================================================================
 
 void RuleManager::blockDomain(const std::string& domain) {
     std::unique_lock<std::shared_mutex> lock(domain_mutex_);
@@ -130,17 +118,14 @@ void RuleManager::unblockDomain(const std::string& domain) {
 }
 
 bool RuleManager::domainMatchesPattern(const std::string& domain, const std::string& pattern) {
-    // Handle *.example.com pattern
     if (pattern.size() >= 2 && pattern[0] == '*' && pattern[1] == '.') {
-        std::string suffix = pattern.substr(1);  // .example.com
+        std::string suffix = pattern.substr(1);
         
-        // Check if domain ends with the pattern
         if (domain.size() >= suffix.size() &&
             domain.compare(domain.size() - suffix.size(), suffix.size(), suffix) == 0) {
             return true;
         }
         
-        // Also match the bare domain (example.com matches *.example.com)
         if (domain == pattern.substr(2)) {
             return true;
         }
@@ -152,12 +137,10 @@ bool RuleManager::domainMatchesPattern(const std::string& domain, const std::str
 bool RuleManager::isDomainBlocked(const std::string& domain) const {
     std::shared_lock<std::shared_mutex> lock(domain_mutex_);
     
-    // Check exact match
     if (blocked_domains_.count(domain) > 0) {
         return true;
     }
     
-    // Check patterns
     std::string lower_domain = domain;
     std::transform(lower_domain.begin(), lower_domain.end(), lower_domain.begin(),
                    [](unsigned char c) { return std::tolower(c); });
@@ -182,10 +165,6 @@ std::vector<std::string> RuleManager::getBlockedDomains() const {
     return result;
 }
 
-// ============================================================================
-// Port Blocking
-// ============================================================================
-
 void RuleManager::blockPort(uint16_t port) {
     std::unique_lock<std::shared_mutex> lock(port_mutex_);
     blocked_ports_.insert(port);
@@ -202,42 +181,30 @@ bool RuleManager::isPortBlocked(uint16_t port) const {
     return blocked_ports_.count(port) > 0;
 }
 
-// ============================================================================
-// Combined Check
-// ============================================================================
-
 std::optional<RuleManager::BlockReason> RuleManager::shouldBlock(
     uint32_t src_ip,
     uint16_t dst_port,
     AppType app,
     const std::string& domain) const {
     
-    // Check IP first (most specific)
     if (isIPBlocked(src_ip)) {
-        return BlockReason{BlockReason::IP, ipToString(src_ip)};
+        return BlockReason{BlockReason::IP_RULE, ipToString(src_ip)};
     }
     
-    // Check port
     if (isPortBlocked(dst_port)) {
-        return BlockReason{BlockReason::PORT, std::to_string(dst_port)};
+        return BlockReason{BlockReason::PORT_RULE, std::to_string(dst_port)};
     }
     
-    // Check app
     if (isAppBlocked(app)) {
-        return BlockReason{BlockReason::APP, appTypeToString(app)};
+        return BlockReason{BlockReason::APP_RULE, appTypeToString(app)};
     }
     
-    // Check domain
     if (!domain.empty() && isDomainBlocked(domain)) {
-        return BlockReason{BlockReason::DOMAIN, domain};
+        return BlockReason{BlockReason::DOMAIN_RULE, domain};
     }
     
     return std::nullopt;
 }
-
-// ============================================================================
-// Persistence
-// ============================================================================
 
 bool RuleManager::saveRules(const std::string& filename) const {
     std::ofstream file(filename);
@@ -245,25 +212,21 @@ bool RuleManager::saveRules(const std::string& filename) const {
         return false;
     }
     
-    // Save blocked IPs
     file << "[BLOCKED_IPS]\n";
     for (const auto& ip : getBlockedIPs()) {
         file << ip << "\n";
     }
     
-    // Save blocked apps
     file << "\n[BLOCKED_APPS]\n";
     for (const auto& app : getBlockedApps()) {
         file << appTypeToString(app) << "\n";
     }
     
-    // Save blocked domains
     file << "\n[BLOCKED_DOMAINS]\n";
     for (const auto& domain : getBlockedDomains()) {
         file << domain << "\n";
     }
     
-    // Save blocked ports
     file << "\n[BLOCKED_PORTS]\n";
     {
         std::shared_lock<std::shared_mutex> lock(port_mutex_);
@@ -287,20 +250,16 @@ bool RuleManager::loadRules(const std::string& filename) {
     std::string current_section;
     
     while (std::getline(file, line)) {
-        // Skip empty lines
         if (line.empty()) continue;
         
-        // Check for section headers
         if (line[0] == '[') {
             current_section = line;
             continue;
         }
         
-        // Process based on section
         if (current_section == "[BLOCKED_IPS]") {
             blockIP(line);
         } else if (current_section == "[BLOCKED_APPS]") {
-            // Convert string back to AppType
             for (int i = 0; i < static_cast<int>(AppType::APP_COUNT); i++) {
                 if (appTypeToString(static_cast<AppType>(i)) == line) {
                     blockApp(static_cast<AppType>(i));
@@ -363,4 +322,4 @@ RuleManager::RuleStats RuleManager::getStats() const {
     return stats;
 }
 
-} // namespace DPI
+}

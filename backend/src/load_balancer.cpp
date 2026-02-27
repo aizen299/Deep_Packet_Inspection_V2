@@ -4,10 +4,6 @@
 
 namespace DPI {
 
-// ============================================================================
-// LoadBalancer Implementation
-// ============================================================================
-
 LoadBalancer::LoadBalancer(int lb_id,
                            std::vector<ThreadSafeQueue<PacketJob>*> fp_queues,
                            int fp_start_id)
@@ -48,19 +44,16 @@ void LoadBalancer::stop() {
 
 void LoadBalancer::run() {
     while (running_) {
-        // Get packet from input queue (with timeout to check running flag)
         auto job_opt = input_queue_.popWithTimeout(std::chrono::milliseconds(100));
         
         if (!job_opt) {
-            continue;  // Timeout or shutdown
+            continue;
         }
         
         packets_received_++;
         
-        // Select target FP based on five-tuple hash
         int fp_index = selectFP(job_opt->tuple);
         
-        // Push to selected FP's queue
         fp_queues_[fp_index]->push(std::move(*job_opt));
         
         packets_dispatched_++;
@@ -69,7 +62,6 @@ void LoadBalancer::run() {
 }
 
 int LoadBalancer::selectFP(const FiveTuple& tuple) {
-    // Hash the five-tuple and map to one of our FPs
     FiveTupleHash hasher;
     size_t hash = hasher(tuple);
     return hash % num_fps_;
@@ -85,15 +77,10 @@ LoadBalancer::LBStats LoadBalancer::getStats() const {
     return stats;
 }
 
-// ============================================================================
-// LBManager Implementation
-// ============================================================================
-
 LBManager::LBManager(int num_lbs, int fps_per_lb,
                      std::vector<ThreadSafeQueue<PacketJob>*> fp_queues)
     : fps_per_lb_(fps_per_lb) {
     
-    // Create load balancers, each handling a subset of FPs
     for (int lb_id = 0; lb_id < num_lbs; lb_id++) {
         std::vector<ThreadSafeQueue<PacketJob>*> lb_fp_queues;
         int fp_start = lb_id * fps_per_lb;
@@ -126,7 +113,6 @@ void LBManager::stopAll() {
 }
 
 LoadBalancer& LBManager::getLBForPacket(const FiveTuple& tuple) {
-    // First level of load balancing: select LB based on hash
     FiveTupleHash hasher;
     size_t hash = hasher(tuple);
     int lb_index = hash % lbs_.size();
@@ -145,4 +131,4 @@ LBManager::AggregatedStats LBManager::getAggregatedStats() const {
     return stats;
 }
 
-} // namespace DPI
+}

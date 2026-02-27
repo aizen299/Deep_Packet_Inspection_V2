@@ -4,12 +4,25 @@
 #include <iomanip>
 #include <chrono>
 #include <cstring>
+#include <fstream>
 
 namespace DPI {
 
-// ============================================================================
-// DPIEngine Implementation
-// ============================================================================
+static void writeJsonReport(const std::string& path, const DPIStats& stats) {
+    std::ofstream out(path);
+    if (!out.is_open()) return;
+
+    out << "{\n";
+    out << "  \"summary\": {\n";
+    out << "    \"total_packets\": " << stats.total_packets.load() << ",\n";
+    out << "    \"total_bytes\": " << stats.total_bytes.load() << ",\n";
+    out << "    \"tcp_packets\": " << stats.tcp_packets.load() << ",\n";
+    out << "    \"udp_packets\": " << stats.udp_packets.load() << ",\n";
+    out << "    \"forwarded\": " << stats.forwarded_packets.load() << ",\n";
+    out << "    \"dropped\": " << stats.dropped_packets.load() << "\n";
+    out << "  }\n";
+    out << "}\n";
+}
 
 DPIEngine::DPIEngine(const Config& config)
     : config_(config), output_queue_(10000) {
@@ -31,36 +44,24 @@ DPIEngine::~DPIEngine() {
 }
 
 bool DPIEngine::initialize() {
-    // Create rule manager
     rule_manager_ = std::make_unique<RuleManager>();
-    
-    // Load rules if specified
     if (!config_.rules_file.empty()) {
         rule_manager_->loadRules(config_.rules_file);
     }
-    
-    // Create output callback
     auto output_cb = [this](const PacketJob& job, PacketAction action) {
         handleOutput(job, action);
     };
-    
-    // Create FP manager (creates FP threads and their queues)
     int total_fps = config_.num_load_balancers * config_.fps_per_lb;
     fp_manager_ = std::make_unique<FPManager>(total_fps, rule_manager_.get(), output_cb);
-    
-    // Create LB manager (creates LB threads, connects to FP queues)
     lb_manager_ = std::make_unique<LBManager>(
         config_.num_load_balancers,
         config_.fps_per_lb,
         fp_manager_->getQueuePtrs()
     );
-    
-    // Create global connection table
     global_conn_table_ = std::make_unique<GlobalConnectionTable>(total_fps);
     for (int i = 0; i < total_fps; i++) {
         global_conn_table_->registerTracker(i, &fp_manager_->getFP(i).getConnectionTracker());
     }
-    
     std::cout << "[DPIEngine] Initialized successfully\n";
     return true;
 }
@@ -71,15 +72,9 @@ void DPIEngine::start() {
     running_ = true;
     processing_complete_ = false;
     
-    // Start output thread
     output_thread_ = std::thread(&DPIEngine::outputThreadFunc, this);
-    
-    // Start FP threads
     fp_manager_->startAll();
-    
-    // Start LB threads
     lb_manager_->startAll();
-    
     std::cout << "[DPIEngine] All threads started\n";
 }
 
@@ -88,35 +83,24 @@ void DPIEngine::stop() {
     
     running_ = false;
     
-    // Stop LB threads first (they feed FPs)
     if (lb_manager_) {
         lb_manager_->stopAll();
     }
-    
-    // Stop FP threads
     if (fp_manager_) {
         fp_manager_->stopAll();
     }
-    
-    // Stop output thread
     output_queue_.shutdown();
     if (output_thread_.joinable()) {
         output_thread_.join();
     }
-    
     std::cout << "[DPIEngine] All threads stopped\n";
 }
 
 void DPIEngine::waitForCompletion() {
-    // Wait for reader to finish
     if (reader_thread_.joinable()) {
         reader_thread_.join();
     }
-    
-    // Wait a bit for queues to drain
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    
-    // Signal completion
     processing_complete_ = true;
 }
 
@@ -126,44 +110,27 @@ bool DPIEngine::processFile(const std::string& input_file,
     std::cout << "\n[DPIEngine] Processing: " << input_file << "\n";
     std::cout << "[DPIEngine] Output to:  " << output_file << "\n\n";
     
-    // Initialize if not already done
     if (!rule_manager_) {
         if (!initialize()) {
             return false;
         }
     }
-    
-    // Open output file
     output_file_.open(output_file, std::ios::binary);
     if (!output_file_.is_open()) {
         std::cerr << "[DPIEngine] Error: Cannot open output file\n";
         return false;
     }
-    
-    // Start processing threads
     start();
-    
-    // Start reader thread
     reader_thread_ = std::thread(&DPIEngine::readerThreadFunc, this, input_file);
-    
-    // Wait for completion
     waitForCompletion();
-    
-    // Give some time for final packets to process
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    
-    // Stop all threads
     stop();
-    
-    // Close output file
     if (output_file_.is_open()) {
         output_file_.close();
     }
-    
-    // Print final report
     std::cout << generateReport();
     std::cout << fp_manager_->generateClassificationReport();
-    
+    writeJsonReport("stats.json", stats_);
     return true;
 }
 
@@ -175,7 +142,6 @@ void DPIEngine::readerThreadFunc(const std::string& input_file) {
         return;
     }
     
-    // Write PCAP header to output
     writeOutputHeader(reader.getGlobalHeader());
     
     PacketAnalyzer::RawPacket raw;
@@ -185,30 +151,20 @@ void DPIEngine::readerThreadFunc(const std::string& input_file) {
     std::cout << "[Reader] Starting packet processing...\n";
     
     while (reader.readNextPacket(raw)) {
-        // Parse the packet
         if (!PacketAnalyzer::PacketParser::parse(raw, parsed)) {
-            continue;  // Skip unparseable packets
+            continue;
         }
-        
-        // Only process IP packets with TCP/UDP
         if (!parsed.has_ip || (!parsed.has_tcp && !parsed.has_udp)) {
             continue;
         }
-        
-        // Create packet job
         PacketJob job = createPacketJob(raw, parsed, packet_id++);
-        
-        // Update global stats
         stats_.total_packets++;
         stats_.total_bytes += raw.data.size();
-        
         if (parsed.has_tcp) {
             stats_.tcp_packets++;
         } else if (parsed.has_udp) {
             stats_.udp_packets++;
         }
-        
-        // Send to appropriate LB based on hash
         LoadBalancer& lb = lb_manager_->getLBForPacket(job.tuple);
         lb.getInputQueue().push(std::move(job));
     }
@@ -225,7 +181,6 @@ PacketJob DPIEngine::createPacketJob(const PacketAnalyzer::RawPacket& raw,
     job.ts_sec = raw.header.ts_sec;
     job.ts_usec = raw.header.ts_usec;
     
-    // Set five-tuple - parse IP addresses from string back to uint32
     auto parseIP = [](const std::string& ip) -> uint32_t {
         uint32_t result = 0;
         int octet = 0;
@@ -242,30 +197,19 @@ PacketJob DPIEngine::createPacketJob(const PacketAnalyzer::RawPacket& raw,
         result |= (octet << shift);
         return result;
     };
-    
     job.tuple.src_ip = parseIP(parsed.src_ip);
     job.tuple.dst_ip = parseIP(parsed.dest_ip);
     job.tuple.src_port = parsed.src_port;
     job.tuple.dst_port = parsed.dest_port;
     job.tuple.protocol = parsed.protocol;
-    
-    // TCP flags
     job.tcp_flags = parsed.tcp_flags;
-    
-    // Copy packet data
     job.data = raw.data;
-    
-    // Calculate offsets
     job.eth_offset = 0;
     job.ip_offset = 14;  // Ethernet header is 14 bytes
-    
-    // IP header length
     if (job.data.size() > 14) {
         uint8_t ip_ihl = job.data[14] & 0x0F;
         size_t ip_header_len = ip_ihl * 4;
         job.transport_offset = 14 + ip_header_len;
-        
-        // Transport header length
         if (parsed.has_tcp && job.data.size() > job.transport_offset) {
             uint8_t tcp_data_offset = (job.data[job.transport_offset + 12] >> 4) & 0x0F;
             size_t tcp_header_len = tcp_data_offset * 4;
@@ -273,13 +217,11 @@ PacketJob DPIEngine::createPacketJob(const PacketAnalyzer::RawPacket& raw,
         } else if (parsed.has_udp) {
             job.payload_offset = job.transport_offset + 8;  // UDP header is 8 bytes
         }
-        
         if (job.payload_offset < job.data.size()) {
             job.payload_length = job.data.size() - job.payload_offset;
             job.payload_data = job.data.data() + job.payload_offset;
         }
     }
-    
     return job;
 }
 
@@ -317,20 +259,14 @@ void DPIEngine::writeOutputPacket(const PacketJob& job) {
     
     if (!output_file_.is_open()) return;
     
-    // Write packet header
     PacketAnalyzer::PcapPacketHeader pkt_header;
     pkt_header.ts_sec = job.ts_sec;
     pkt_header.ts_usec = job.ts_usec;
     pkt_header.incl_len = job.data.size();
     pkt_header.orig_len = job.data.size();
-    
     output_file_.write(reinterpret_cast<const char*>(&pkt_header), sizeof(pkt_header));
     output_file_.write(reinterpret_cast<const char*>(job.data.data()), job.data.size());
 }
-
-// ============================================================================
-// Rule Management API
-// ============================================================================
 
 void DPIEngine::blockIP(const std::string& ip) {
     if (rule_manager_) {
@@ -401,9 +337,6 @@ bool DPIEngine::saveRules(const std::string& filename) {
     return false;
 }
 
-// ============================================================================
-// Reporting
-// ============================================================================
 
 std::string DPIEngine::generateReport() const {
     std::ostringstream ss;
@@ -484,4 +417,4 @@ void DPIEngine::printStatus() const {
     }
 }
 
-} // namespace DPI
+}

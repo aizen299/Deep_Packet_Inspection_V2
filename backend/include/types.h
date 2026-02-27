@@ -8,18 +8,16 @@
 #include <vector>
 #include <atomic>
 #include <optional>
+#include <array>
 
 namespace DPI {
 
-// ============================================================================
-// Five-Tuple: Uniquely identifies a connection/flow
-// ============================================================================
 struct FiveTuple {
     uint32_t src_ip;
     uint32_t dst_ip;
     uint16_t src_port;
     uint16_t dst_port;
-    uint8_t  protocol;  // TCP=6, UDP=17
+    uint8_t  protocol;
     
     bool operator==(const FiveTuple& other) const {
         return src_ip == other.src_ip &&
@@ -29,31 +27,37 @@ struct FiveTuple {
                protocol == other.protocol;
     }
     
-    // Create reverse tuple (for matching bidirectional flows)
     FiveTuple reverse() const {
         return {dst_ip, src_ip, dst_port, src_port, protocol};
     }
     
     std::string toString() const;
-};
 
-// Hash function for FiveTuple (used for load balancing)
-struct FiveTupleHash {
-    size_t operator()(const FiveTuple& tuple) const {
-        // Simple but effective hash combining all fields
-        size_t h = 0;
-        h ^= std::hash<uint32_t>{}(tuple.src_ip) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        h ^= std::hash<uint32_t>{}(tuple.dst_ip) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        h ^= std::hash<uint16_t>{}(tuple.src_port) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        h ^= std::hash<uint16_t>{}(tuple.dst_port) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        h ^= std::hash<uint8_t>{}(tuple.protocol) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        return h;
+    bool isValid() const {
+        return protocol != 0 && (src_port != 0 || dst_port != 0);
+    }
+
+    uint64_t compactHashKey() const {
+        return (static_cast<uint64_t>(src_ip) << 32) ^
+               (static_cast<uint64_t>(dst_ip)) ^
+               (static_cast<uint64_t>(src_port) << 16) ^
+               (static_cast<uint64_t>(dst_port)) ^
+               protocol;
     }
 };
 
-// ============================================================================
-// Application Classification
-// ============================================================================
+struct FiveTupleHash {
+    size_t operator()(const FiveTuple& tuple) const noexcept {
+        uint64_t key = tuple.compactHashKey();
+        key ^= key >> 33;
+        key *= 0xff51afd7ed558ccdULL;
+        key ^= key >> 33;
+        key *= 0xc4ceb9fe1a85ec53ULL;
+        key ^= key >> 33;
+        return static_cast<size_t>(key);
+    }
+};
+
 enum class AppType {
     UNKNOWN = 0,
     HTTP,
@@ -61,7 +65,6 @@ enum class AppType {
     DNS,
     TLS,
     QUIC,
-    // Specific applications (detected via SNI)
     GOOGLE,
     FACEBOOK,
     YOUTUBE,
@@ -79,16 +82,12 @@ enum class AppType {
     DISCORD,
     GITHUB,
     CLOUDFLARE,
-    // Add more as needed
-    APP_COUNT  // Keep this last for counting
+    APP_COUNT
 };
 
 std::string appTypeToString(AppType type);
 AppType sniToAppType(const std::string& sni);
 
-// ============================================================================
-// Connection State
-// ============================================================================
 enum class ConnectionState {
     NEW,
     ESTABLISHED,
@@ -97,24 +96,18 @@ enum class ConnectionState {
     CLOSED
 };
 
-// ============================================================================
-// Packet Action (what to do with the packet)
-// ============================================================================
 enum class PacketAction {
-    FORWARD,    // Send to internet
-    DROP,       // Block/drop the packet
-    INSPECT,    // Needs further inspection
-    LOG_ONLY    // Forward but log
+    FORWARD,
+    DROP,
+    INSPECT,
+    LOG_ONLY
 };
 
-// ============================================================================
-// Connection Entry (tracked per flow)
-// ============================================================================
 struct Connection {
     FiveTuple tuple;
     ConnectionState state = ConnectionState::NEW;
     AppType app_type = AppType::UNKNOWN;
-    std::string sni;  // Server Name Indication (if detected)
+    std::string sni;
     
     uint64_t packets_in = 0;
     uint64_t packets_out = 0;
@@ -126,15 +119,14 @@ struct Connection {
     
     PacketAction action = PacketAction::FORWARD;
     
-    // For TCP state tracking
     bool syn_seen = false;
     bool syn_ack_seen = false;
     bool fin_seen = false;
+    bool rst_seen = false;
+    uint64_t last_activity_ns = 0;
+    double average_packet_size = 0.0;
 };
 
-// ============================================================================
-// Packet wrapper for queue passing
-// ============================================================================
 struct PacketJob {
     uint32_t packet_id;
     FiveTuple tuple;
@@ -146,15 +138,13 @@ struct PacketJob {
     size_t payload_length = 0;
     uint8_t tcp_flags = 0;
     const uint8_t* payload_data = nullptr;
+    bool is_fragmented = false;
+    bool is_malformed = false;
     
-    // Timestamps
     uint32_t ts_sec;
     uint32_t ts_usec;
 };
 
-// ============================================================================
-// Statistics - uses regular uint64_t, protected by mutex externally
-// ============================================================================
 struct DPIStats {
     std::atomic<uint64_t> total_packets{0};
     std::atomic<uint64_t> total_bytes{0};
@@ -164,13 +154,15 @@ struct DPIStats {
     std::atomic<uint64_t> udp_packets{0};
     std::atomic<uint64_t> other_packets{0};
     std::atomic<uint64_t> active_connections{0};
+    std::atomic<uint64_t> malformed_packets{0};
+    std::atomic<uint64_t> fragmented_packets{0};
+    std::atomic<uint64_t> rule_block_events{0};
     
-    // Non-copyable due to atomics
     DPIStats() = default;
     DPIStats(const DPIStats&) = delete;
     DPIStats& operator=(const DPIStats&) = delete;
 };
 
-} // namespace DPI
+}
 
-#endif // DPI_TYPES_H
+#endif
