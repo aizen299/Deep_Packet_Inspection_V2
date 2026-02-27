@@ -39,9 +39,10 @@ backend/data/*
 # ==============================
 
 backend/api/node_modules/
-dashboard/node_modules/
-dashboard/.next/
-dashboard/out/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+node_modules/
 
 # ==============================
 # Environment Files
