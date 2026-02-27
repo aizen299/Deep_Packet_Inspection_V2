@@ -1,10 +1,11 @@
 # Deep Packet Inspection (DPI) System
 
-A production-oriented Deep Packet Inspection (DPI) system built with:
+A production-oriented Deep Packet Inspection (DPI) platform built with:
 
 - High-performance C++ multi-threaded engine  
 - Node.js REST control plane  
 - Next.js analytics dashboard  
+- Dockerized deployment  
 
 This system processes PCAP files, classifies traffic at the application layer, applies filtering rules, and exposes structured analytics via an API for visualization.
 
@@ -23,6 +24,17 @@ Node.js REST API (Control Plane)
    │
    ▼
 Next.js Dashboard (Analytics UI)
+```
+
+Containerized deployment:
+
+```
+┌─────────────────────────────┐
+│        Docker Compose       │
+├───────────────┬─────────────┤
+│ Backend       │ Dashboard   │
+│ (Engine + API)│ (Next.js)   │
+└───────────────┴─────────────┘
 ```
 
 ---
@@ -150,7 +162,7 @@ http://localhost:3000
 
 ---
 
-# 🛠 Local Setup
+# 🛠 Local Development Setup
 
 ## 1️⃣ Build Engine
 
@@ -194,24 +206,56 @@ npm run dev
 
 ---
 
+# 🐳 Docker Deployment
+
+This project is fully containerized.
+
+Two containers are used:
+
+- **Backend container** (C++ Engine + Express API)
+- **Dashboard container** (Next.js UI)
+
+## Build and Run
+
+From project root:
+
+```
+docker-compose up --build
+```
+
+Access:
+
+- Dashboard → http://localhost:3000  
+- API → http://localhost:4000  
+
+Health check:
+
+```
+curl http://localhost:4000/health
+```
+
+---
+
 # 📁 Project Structure
 
 ```
 Packet_analyzer/
 │
 ├── backend/
-│   ├── build/
 │   ├── data/
 │   ├── output/
 │   ├── include/
 │   ├── src/
 │   ├── api/
+│   ├── Dockerfile
 │   └── build.sh
 │
 ├── frontend/
+│   ├── Dockerfile
+│   └── src/
 │
+├── docker-compose.yml
 ├── LICENSE
-│
 └── README.md
 ```
 
@@ -225,13 +269,13 @@ Packet_analyzer/
 - Application frequency analytics  
 - Structured API integration  
 
-Planned extensions:
+Future extensions:
 
 - Real-time packet capture mode  
 - ML-based anomaly detection  
 - WebSocket live updates  
 - Prometheus metrics  
-- Full Docker deployment  
+- Cloud deployment  
 
 ---
 
@@ -244,18 +288,8 @@ This project demonstrates:
 - Network protocol parsing  
 - Backend API orchestration  
 - Modern frontend analytics integration  
+- Containerized deployment architecture  
 - Full-stack systems engineering  
-
----
-
-# 🐳 Docker (Planned)
-
-Future additions:
-
-- Engine container  
-- API container  
-- Dashboard container  
-- Unified `docker-compose` deployment  
 
 ---
 
