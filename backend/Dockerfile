@@ -6,13 +6,14 @@ FROM node:20-bullseye
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
+    libpcap-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy backend
 COPY . .
-
+RUN mkdir -p /app/output
 # Build C++ engine
 RUN chmod +x build.sh && ./build.sh
 

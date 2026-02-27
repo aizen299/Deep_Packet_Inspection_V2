@@ -1,0 +1,9 @@
+build
+build/
+output
+node_modules
+api/node_modules
+*.pcap
+*.json
+CMakeCache.txt
+CMakeFiles
