@@ -7,12 +7,14 @@ namespace DPI {
 
 FastPathProcessor::FastPathProcessor(int fp_id,
                                      RuleManager* rule_manager,
-                                     PacketOutputCallback output_callback)
+                                     PacketOutputCallback output_callback,
+                                     bool silent)
     : fp_id_(fp_id),
       input_queue_(10000),
       conn_tracker_(fp_id),
       rule_manager_(rule_manager),
-      output_callback_(std::move(output_callback)) {
+      output_callback_(std::move(output_callback)),
+      silent_(silent) {
 }
 
 FastPathProcessor::~FastPathProcessor() {
@@ -25,7 +27,9 @@ void FastPathProcessor::start() {
     running_ = true;
     thread_ = std::thread(&FastPathProcessor::run, this);
     
-    std::cout << "[FP" << fp_id_ << "] Started\n";
+    if (!silent_) {
+        std::cout << "[FP" << fp_id_ << "] Started\n";
+    }
 }
 
 void FastPathProcessor::stop() {
@@ -38,8 +42,10 @@ void FastPathProcessor::stop() {
         thread_.join();
     }
     
-    std::cout << "[FP" << fp_id_ << "] Stopped (processed " 
-              << packets_processed_ << " packets)\n";
+    if (!silent_) {
+        std::cout << "[FP" << fp_id_ << "] Stopped (processed " 
+                  << packets_processed_ << " packets)\n";
+    }
 }
 
 void FastPathProcessor::run() {
@@ -206,7 +212,9 @@ PacketAction FastPathProcessor::checkRules(const PacketJob& job, Connection* con
                 break;
         }
         
-        std::cout << ss.str() << std::endl;
+        if (!silent_) {
+            std::cout << ss.str() << std::endl;
+        }
         
         conn_tracker_.blockConnection(conn);
         
@@ -260,16 +268,31 @@ FastPathProcessor::FPStats FastPathProcessor::getStats() const {
     return stats;
 }
 
+std::unordered_map<std::string, uint64_t> FastPathProcessor::getApplicationStats() const {
+    std::unordered_map<std::string, uint64_t> app_counts;
+
+    conn_tracker_.forEach([&](const Connection& conn) {
+        std::string app = appTypeToString(conn.app_type);
+        app_counts[app]++;
+    });
+
+    return app_counts;
+}
+
 FPManager::FPManager(int num_fps,
                      RuleManager* rule_manager,
-                     PacketOutputCallback output_callback) {
-    
+                     PacketOutputCallback output_callback,
+                     bool silent)
+    : silent_(silent) {
+
     for (int i = 0; i < num_fps; i++) {
-        auto fp = std::make_unique<FastPathProcessor>(i, rule_manager, output_callback);
+        auto fp = std::make_unique<FastPathProcessor>(i, rule_manager, output_callback, silent_);
         fps_.push_back(std::move(fp));
     }
     
-    std::cout << "[FPManager] Created " << num_fps << " fast path processors\n";
+    if (!silent_) {
+        std::cout << "[FPManager] Created " << num_fps << " fast path processors\n";
+    }
 }
 
 FPManager::~FPManager() {
@@ -300,6 +323,19 @@ FPManager::AggregatedStats FPManager::getAggregatedStats() const {
     }
     
     return stats;
+}
+
+std::unordered_map<std::string, uint64_t> FPManager::getApplicationStats() const {
+    std::unordered_map<std::string, uint64_t> aggregated;
+
+    for (const auto& fp : fps_) {
+        auto local = fp->getApplicationStats();
+        for (const auto& pair : local) {
+            aggregated[pair.first] += pair.second;
+        }
+    }
+
+    return aggregated;
 }
 
 std::string FPManager::generateClassificationReport() const {

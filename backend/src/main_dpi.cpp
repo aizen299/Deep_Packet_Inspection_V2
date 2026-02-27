@@ -89,6 +89,7 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> block_apps;
     std::vector<std::string> block_domains;
     std::string rules_file;
+    bool json_mode = false;
     
     for (int i = 3; i < argc; i++) {
         std::string arg = argv[i];
@@ -107,13 +108,17 @@ int main(int argc, char* argv[]) {
             config.fps_per_lb = std::stoi(argv[++i]);
         } else if (arg == "--verbose") {
             config.verbose = true;
+        } else if (arg == "--json") {
+            json_mode = true;
+            config.silent = true;
         } else if (arg == "--help" || arg == "-h") {
             printUsage(argv[0]);
             return 0;
         }
     }
     
-    DPIEngine engine(config);
+
+DPIEngine engine(config);
     
     if (!engine.initialize()) {
         std::cerr << "Failed to initialize DPI engine\n";
@@ -140,9 +145,12 @@ int main(int argc, char* argv[]) {
         std::cerr << "Failed to process file\n";
         return 1;
     }
-    
-    std::cout << "\nProcessing complete!\n";
-    std::cout << "Output written to: " << output_file << "\n";
-    
+
+    if (json_mode) {
+        std::cout << engine.generateJsonReport() << std::endl;
+        return 0;
+    }
+
+    std::cout << engine.generateReport() << std::endl;
     return 0;
 }

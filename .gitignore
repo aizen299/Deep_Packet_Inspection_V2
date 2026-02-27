@@ -1,15 +1,26 @@
-# C++
+# ===== Backend Build Artifacts =====
+backend/build/
+backend/output/
 backend/dpi_engine
 backend/*.pcap
-backend/stats.json
+backend/*.json
+
+# ===== Global Generated Files =====
 *.pcap
-stats.json
-output.pcap
-filtered.pcap
+*.json
 
-# Node
-dashboard/node_modules
-dashboard/.next
+# ===== Demo Sample PCAP =====
+backend/data/*
+!backend/data/sample.pcap
 
-# macOS
+# ===== Node / Next =====
+dashboard/node_modules/
+dashboard/.next/
+dashboard/out/
+
+# ===== Environment Files =====
+.env
+.env.local
+
+# ===== macOS =====
 .DS_Store

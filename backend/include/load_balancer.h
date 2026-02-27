@@ -14,7 +14,8 @@ class LoadBalancer {
 public:
     LoadBalancer(int lb_id, 
                  std::vector<ThreadSafeQueue<PacketJob>*> fp_queues,
-                 int fp_start_id);
+                 int fp_start_id,
+                 bool silent);
     
     ~LoadBalancer();
     
@@ -60,6 +61,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> paused_{false};
     std::thread thread_;
+    bool silent_;
     
     void run();
     
@@ -71,7 +73,8 @@ private:
 class LBManager {
 public:
     LBManager(int num_lbs, int fps_per_lb,
-              std::vector<ThreadSafeQueue<PacketJob>*> fp_queues);
+              std::vector<ThreadSafeQueue<PacketJob>*> fp_queues,
+              bool silent);
     
     ~LBManager();
     
@@ -99,6 +102,7 @@ public:
 private:
     std::vector<std::unique_ptr<LoadBalancer>> lbs_;
     int fps_per_lb_;
+    bool silent_;
 };
 
 }

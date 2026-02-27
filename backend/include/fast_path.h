@@ -10,6 +10,8 @@
 #include <atomic>
 #include <memory>
 #include <functional>
+#include <unordered_map>
+#include <string>
 
 namespace DPI {
 
@@ -19,7 +21,8 @@ class FastPathProcessor {
 public:
     FastPathProcessor(int fp_id,
                       RuleManager* rule_manager,
-                      PacketOutputCallback output_callback);
+                      PacketOutputCallback output_callback,
+                      bool silent);
     
     ~FastPathProcessor();
     
@@ -48,6 +51,8 @@ public:
     };
     
     FPStats getStats() const;
+
+    std::unordered_map<std::string, uint64_t> getApplicationStats() const;
     
     int getId() const { return fp_id_; }
     
@@ -63,6 +68,8 @@ private:
     RuleManager* rule_manager_;
     
     PacketOutputCallback output_callback_;
+    
+    bool silent_;
     
     std::atomic<uint64_t> packets_processed_{0};
     std::atomic<uint64_t> packets_forwarded_{0};
@@ -96,7 +103,8 @@ class FPManager {
 public:
     FPManager(int num_fps,
               RuleManager* rule_manager,
-              PacketOutputCallback output_callback);
+              PacketOutputCallback output_callback,
+              bool silent);
     
     ~FPManager();
     
@@ -128,6 +136,8 @@ public:
     };
     
     AggregatedStats getAggregatedStats() const;
+
+    std::unordered_map<std::string, uint64_t> getApplicationStats() const;
     
     std::string generateClassificationReport() const;
     
@@ -135,6 +145,7 @@ public:
 
 private:
     std::vector<std::unique_ptr<FastPathProcessor>> fps_;
+    bool silent_;
 };
 
 }

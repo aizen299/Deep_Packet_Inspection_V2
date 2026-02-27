@@ -42,12 +42,14 @@ bool PcapReader::open(const std::string& filename) {
         return false;
     }
     
-    std::cout << "Opened PCAP file: " << filename << std::endl;
-    std::cout << "  Version: " << global_header_.version_major << "." 
-              << global_header_.version_minor << std::endl;
-    std::cout << "  Snaplen: " << global_header_.snaplen << " bytes" << std::endl;
-    std::cout << "  Link type: " << global_header_.network 
-              << (global_header_.network == 1 ? " (Ethernet)" : "") << std::endl;
+    if (!silent_) {
+        std::cout << "Opened PCAP file: " << filename << std::endl;
+        std::cout << "  Version: " << global_header_.version_major << "." 
+                  << global_header_.version_minor << std::endl;
+        std::cout << "  Snaplen: " << global_header_.snaplen << " bytes" << std::endl;
+        std::cout << "  Link type: " << global_header_.network 
+                  << (global_header_.network == 1 ? " (Ethernet)" : "") << std::endl;
+    }
     
     return true;
 }

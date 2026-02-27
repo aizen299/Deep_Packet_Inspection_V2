@@ -8,35 +8,21 @@
 
 namespace DPI {
 
-static void writeJsonReport(const std::string& path, const DPIStats& stats) {
-    std::ofstream out(path);
-    if (!out.is_open()) return;
-
-    out << "{\n";
-    out << "  \"summary\": {\n";
-    out << "    \"total_packets\": " << stats.total_packets.load() << ",\n";
-    out << "    \"total_bytes\": " << stats.total_bytes.load() << ",\n";
-    out << "    \"tcp_packets\": " << stats.tcp_packets.load() << ",\n";
-    out << "    \"udp_packets\": " << stats.udp_packets.load() << ",\n";
-    out << "    \"forwarded\": " << stats.forwarded_packets.load() << ",\n";
-    out << "    \"dropped\": " << stats.dropped_packets.load() << "\n";
-    out << "  }\n";
-    out << "}\n";
-}
 
 DPIEngine::DPIEngine(const Config& config)
     : config_(config), output_queue_(10000) {
-    
-    std::cout << "\n";
-    std::cout << "╔══════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║                    DPI ENGINE v1.0                            ║\n";
-    std::cout << "║               Deep Packet Inspection System                   ║\n";
-    std::cout << "╠══════════════════════════════════════════════════════════════╣\n";
-    std::cout << "║ Configuration:                                                ║\n";
-    std::cout << "║   Load Balancers:    " << std::setw(3) << config.num_load_balancers << "                                       ║\n";
-    std::cout << "║   FPs per LB:        " << std::setw(3) << config.fps_per_lb << "                                       ║\n";
-    std::cout << "║   Total FP threads:  " << std::setw(3) << (config.num_load_balancers * config.fps_per_lb) << "                                       ║\n";
-    std::cout << "╚══════════════════════════════════════════════════════════════╝\n";
+    if (!config_.silent) {
+        std::cout << "\n";
+        std::cout << "╔══════════════════════════════════════════════════════════════╗\n";
+        std::cout << "║                    DPI ENGINE v1.0                            ║\n";
+        std::cout << "║               Deep Packet Inspection System                   ║\n";
+        std::cout << "╠══════════════════════════════════════════════════════════════╣\n";
+        std::cout << "║ Configuration:                                                ║\n";
+        std::cout << "║   Load Balancers:    " << std::setw(3) << config.num_load_balancers << "                                       ║\n";
+        std::cout << "║   FPs per LB:        " << std::setw(3) << config.fps_per_lb << "                                       ║\n";
+        std::cout << "║   Total FP threads:  " << std::setw(3) << (config.num_load_balancers * config.fps_per_lb) << "                                       ║\n";
+        std::cout << "╚══════════════════════════════════════════════════════════════╝\n";
+    }
 }
 
 DPIEngine::~DPIEngine() {
@@ -52,17 +38,20 @@ bool DPIEngine::initialize() {
         handleOutput(job, action);
     };
     int total_fps = config_.num_load_balancers * config_.fps_per_lb;
-    fp_manager_ = std::make_unique<FPManager>(total_fps, rule_manager_.get(), output_cb);
+    fp_manager_ = std::make_unique<FPManager>(total_fps, rule_manager_.get(), output_cb,config_.silent);
     lb_manager_ = std::make_unique<LBManager>(
         config_.num_load_balancers,
         config_.fps_per_lb,
-        fp_manager_->getQueuePtrs()
+        fp_manager_->getQueuePtrs(),
+        config_.silent
     );
     global_conn_table_ = std::make_unique<GlobalConnectionTable>(total_fps);
     for (int i = 0; i < total_fps; i++) {
         global_conn_table_->registerTracker(i, &fp_manager_->getFP(i).getConnectionTracker());
     }
-    std::cout << "[DPIEngine] Initialized successfully\n";
+    if (!config_.silent) {
+        std::cout << "[DPIEngine] Initialized successfully\n";
+    }
     return true;
 }
 
@@ -75,7 +64,9 @@ void DPIEngine::start() {
     output_thread_ = std::thread(&DPIEngine::outputThreadFunc, this);
     fp_manager_->startAll();
     lb_manager_->startAll();
-    std::cout << "[DPIEngine] All threads started\n";
+    if (!config_.silent) {
+        std::cout << "[DPIEngine] All threads started\n";
+    }
 }
 
 void DPIEngine::stop() {
@@ -93,7 +84,9 @@ void DPIEngine::stop() {
     if (output_thread_.joinable()) {
         output_thread_.join();
     }
-    std::cout << "[DPIEngine] All threads stopped\n";
+    if (!config_.silent) {
+        std::cout << "[DPIEngine] All threads stopped\n";
+    }
 }
 
 void DPIEngine::waitForCompletion() {
@@ -106,10 +99,10 @@ void DPIEngine::waitForCompletion() {
 
 bool DPIEngine::processFile(const std::string& input_file,
                             const std::string& output_file) {
-    
-    std::cout << "\n[DPIEngine] Processing: " << input_file << "\n";
-    std::cout << "[DPIEngine] Output to:  " << output_file << "\n\n";
-    
+    if (!config_.silent) {
+        std::cout << "\n[DPIEngine] Processing: " << input_file << "\n";
+        std::cout << "[DPIEngine] Output to:  " << output_file << "\n\n";
+    }
     if (!rule_manager_) {
         if (!initialize()) {
             return false;
@@ -128,14 +121,12 @@ bool DPIEngine::processFile(const std::string& input_file,
     if (output_file_.is_open()) {
         output_file_.close();
     }
-    std::cout << generateReport();
-    std::cout << fp_manager_->generateClassificationReport();
-    writeJsonReport("stats.json", stats_);
+    
     return true;
 }
 
 void DPIEngine::readerThreadFunc(const std::string& input_file) {
-    PacketAnalyzer::PcapReader reader;
+    PacketAnalyzer::PcapReader reader(config_.silent);
     
     if (!reader.open(input_file)) {
         std::cerr << "[Reader] Error: Cannot open input file\n";
@@ -148,7 +139,9 @@ void DPIEngine::readerThreadFunc(const std::string& input_file) {
     PacketAnalyzer::ParsedPacket parsed;
     uint32_t packet_id = 0;
     
-    std::cout << "[Reader] Starting packet processing...\n";
+    if (!config_.silent) {
+        std::cout << "[Reader] Starting packet processing...\n";
+    }
     
     while (reader.readNextPacket(raw)) {
         if (!PacketAnalyzer::PacketParser::parse(raw, parsed)) {
@@ -169,7 +162,9 @@ void DPIEngine::readerThreadFunc(const std::string& input_file) {
         lb.getInputQueue().push(std::move(job));
     }
     
-    std::cout << "[Reader] Finished reading " << packet_id << " packets\n";
+    if (!config_.silent) {
+        std::cout << "[Reader] Finished reading " << packet_id << " packets\n";
+    }
     reader.close();
 }
 
@@ -205,7 +200,7 @@ PacketJob DPIEngine::createPacketJob(const PacketAnalyzer::RawPacket& raw,
     job.tcp_flags = parsed.tcp_flags;
     job.data = raw.data;
     job.eth_offset = 0;
-    job.ip_offset = 14;  // Ethernet header is 14 bytes
+    job.ip_offset = 14;  
     if (job.data.size() > 14) {
         uint8_t ip_ihl = job.data[14] & 0x0F;
         size_t ip_header_len = ip_ihl * 4;
@@ -215,7 +210,7 @@ PacketJob DPIEngine::createPacketJob(const PacketAnalyzer::RawPacket& raw,
             size_t tcp_header_len = tcp_data_offset * 4;
             job.payload_offset = job.transport_offset + tcp_header_len;
         } else if (parsed.has_udp) {
-            job.payload_offset = job.transport_offset + 8;  // UDP header is 8 bytes
+            job.payload_offset = job.transport_offset + 8;  
         }
         if (job.payload_offset < job.data.size()) {
             job.payload_length = job.data.size() - job.payload_offset;
@@ -401,19 +396,117 @@ std::string DPIEngine::generateClassificationReport() const {
     return "";
 }
 
+std::string DPIEngine::generateJsonReport() const {
+    std::ostringstream ss;
+
+    ss << "{";
+
+    ss << "\"packet_stats\":{";
+    ss << "\"total_packets\":" << stats_.total_packets.load() << ",";
+    ss << "\"total_bytes\":" << stats_.total_bytes.load() << ",";
+    ss << "\"tcp_packets\":" << stats_.tcp_packets.load() << ",";
+    ss << "\"udp_packets\":" << stats_.udp_packets.load();
+    ss << "},";
+
+    ss << "\"filtering\":{";
+    ss << "\"forwarded\":" << stats_.forwarded_packets.load() << ",";
+    ss << "\"dropped\":" << stats_.dropped_packets.load() << ",";
+
+    double drop_rate = 0.0;
+    if (stats_.total_packets.load() > 0) {
+        drop_rate = 100.0 * stats_.dropped_packets.load() / stats_.total_packets.load();
+    }
+    ss << "\"drop_rate\":" << std::fixed << std::setprecision(2) << drop_rate;
+    ss << "},";
+
+    if (lb_manager_) {
+        auto lb_stats = lb_manager_->getAggregatedStats();
+        ss << "\"load_balancer\":{";
+        ss << "\"received\":" << lb_stats.total_received << ",";
+        ss << "\"dispatched\":" << lb_stats.total_dispatched;
+        ss << "},";
+    }
+
+    if (fp_manager_) {
+        auto fp_stats = fp_manager_->getAggregatedStats();
+        ss << "\"fast_path\":{";
+        ss << "\"processed\":" << fp_stats.total_processed << ",";
+        ss << "\"forwarded\":" << fp_stats.total_forwarded << ",";
+        ss << "\"dropped\":" << fp_stats.total_dropped << ",";
+        ss << "\"active_connections\":" << fp_stats.total_connections;
+        ss << "}";
+    }
+
+    ss << ",\"applications\":{";
+    if (fp_manager_) {
+        auto app_stats = fp_manager_->getApplicationStats();
+
+        // Calculate total
+        uint64_t total = 0;
+        for (const auto& pair : app_stats) {
+            total += pair.second;
+        }
+
+        // Move to vector for sorting
+        std::vector<std::pair<std::string, uint64_t>> apps(app_stats.begin(), app_stats.end());
+        std::sort(apps.begin(), apps.end(),
+            [](const auto& a, const auto& b) {
+                return a.second > b.second;
+            });
+
+        const size_t TOP_N = 8;
+        uint64_t other_count = 0;
+        bool first = true;
+
+        for (size_t i = 0; i < apps.size(); ++i) {
+            if (i < TOP_N) {
+                if (!first) ss << ",";
+
+                double percent = total > 0 ? (apps[i].second * 100.0 / total) : 0.0;
+
+                ss << "\"" << apps[i].first << "\":{";
+                ss << "\"count\":" << apps[i].second << ",";
+                ss << "\"percentage\":" << std::fixed << std::setprecision(2) << percent;
+                ss << "}";
+
+                first = false;
+            } else {
+                other_count += apps[i].second;
+            }
+        }
+
+        if (other_count > 0) {
+            if (!first) ss << ",";
+
+            double percent = total > 0 ? (other_count * 100.0 / total) : 0.0;
+
+            ss << "\"Other\":{";
+            ss << "\"count\":" << other_count << ",";
+            ss << "\"percentage\":" << std::fixed << std::setprecision(2) << percent;
+            ss << "}";
+        }
+    }
+    ss << "}";
+
+    ss << "}";
+
+    return ss.str();
+}
+
 const DPIStats& DPIEngine::getStats() const {
     return stats_;
 }
 
 void DPIEngine::printStatus() const {
-    std::cout << "\n--- Live Status ---\n";
-    std::cout << "Packets: " << stats_.total_packets.load()
-              << " | Forwarded: " << stats_.forwarded_packets.load()
-              << " | Dropped: " << stats_.dropped_packets.load() << "\n";
-    
-    if (fp_manager_) {
-        auto fp_stats = fp_manager_->getAggregatedStats();
-        std::cout << "Connections: " << fp_stats.total_connections << "\n";
+    if (!config_.silent) {
+        std::cout << "\n--- Live Status ---\n";
+        std::cout << "Packets: " << stats_.total_packets.load()
+                  << " | Forwarded: " << stats_.forwarded_packets.load()
+                  << " | Dropped: " << stats_.dropped_packets.load() << "\n";
+        if (fp_manager_) {
+            auto fp_stats = fp_manager_->getAggregatedStats();
+            std::cout << "Connections: " << fp_stats.total_connections << "\n";
+        }
     }
 }
 

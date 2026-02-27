@@ -42,7 +42,7 @@ struct RawPacket {
 
 class PcapReader {
 public:
-    PcapReader() = default;
+    explicit PcapReader(bool silent = false) : silent_(silent) {}
     ~PcapReader();
 
     bool open(const std::string& filename);
@@ -67,6 +67,7 @@ private:
     bool strict_mode_ = true;
     uint64_t file_size_ = 0;
     uint64_t bytes_read_ = 0;
+    bool silent_ = false;
     
     uint16_t maybeSwap16(uint16_t value) const;
     uint32_t maybeSwap32(uint32_t value) const;

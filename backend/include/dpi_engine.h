@@ -27,6 +27,7 @@ public:
         size_t cleanup_interval_seconds = 30;
         std::string rules_file;
         bool verbose = false;
+        bool silent = false;
         bool enable_periodic_cleanup = true;
         bool enable_auto_scaling_hint = false;
     };
@@ -67,6 +68,7 @@ public:
     bool saveRules(const std::string& filename);
     
     std::string generateReport() const;
+    std::string generateJsonReport() const;
     
     std::string generateClassificationReport() const;
     
