@@ -2,6 +2,10 @@
 backend/dpi_engine
 backend/*.pcap
 backend/stats.json
+*.pcap
+stats.json
+output.pcap
+filtered.pcap
 
 # Node
 dashboard/node_modules
