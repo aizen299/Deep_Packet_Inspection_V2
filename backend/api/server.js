@@ -6,12 +6,27 @@ import path from "path"
 import { fileURLToPath } from "url"
 import axios from "axios"
 
+import http from "http"
+import { Server } from "socket.io"
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const app = express()
 app.use(cors())
 app.use(express.json())
+
+const server = http.createServer(app)
+
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+  },
+})
+
+io.on("connection", (socket) => {
+  console.log("Dashboard connected:", socket.id)
+})
 
 const upload = multer({ dest: path.join(__dirname, "uploads") })
 
@@ -24,6 +39,7 @@ let lastRunMeta = {
 }
 
 const ENGINE_PATH = path.join(__dirname, "../build/bin/dpi_engine")
+const OUTPUT_DIR = path.join(__dirname, "../output")
 
 function detectSuspicious(data) {
   if (!data?.applications) return null
@@ -69,6 +85,8 @@ function runEngine(inputPath, outputPath, inputLabel, res) {
 
   engineBusy = true
   const start = Date.now()
+  // Reset cached state to avoid stale dashboard data
+  cachedStats = null
 
   const command = `"${ENGINE_PATH}" "${inputPath}" "${outputPath}" --json`
 
@@ -128,8 +146,11 @@ function runEngine(inputPath, outputPath, inputLabel, res) {
       let mlResult = null
 
       try {
+        const ML_SERVICE_URL =
+          process.env.ML_SERVICE_URL || "http://localhost:5050"
+
         const mlResponse = await axios.post(
-          "http://localhost:5050/predict",
+          `${ML_SERVICE_URL}/predict`,
           featureVector
         )
         mlResult = mlResponse.data
@@ -137,10 +158,18 @@ function runEngine(inputPath, outputPath, inputLabel, res) {
         console.error("ML service error:", mlErr.message)
       }
 
+      const finalPayload = {
+        ...cachedStats,
+        ml: mlResult,
+      }
+
+      // Push real-time update to all connected dashboards
+      io.emit("stats_update", finalPayload)
+      io.emit("analysis_complete", finalPayload)
+
       res.json({
         success: true,
-        data: cachedStats,
-        ml: mlResult,
+        data: finalPayload,
       })
     } catch (e) {
       console.error("JSON parse error:", e)
@@ -155,7 +184,7 @@ function runEngine(inputPath, outputPath, inputLabel, res) {
 
 app.post("/analyze", (req, res) => {
   const input = path.join(__dirname, "../data/sample.pcap")
-  const output = path.join(__dirname, "../output/filtered.pcap")
+  const output = path.join(OUTPUT_DIR, "filtered.pcap")
 
   runEngine(input, output, "sample.pcap", res)
 })
@@ -166,7 +195,7 @@ app.post("/upload", upload.single("pcap"), (req, res) => {
   }
 
   const input = path.resolve(req.file.path)
-  const output = path.join(__dirname, "../output/upload_filtered.pcap")
+  const output = path.join(OUTPUT_DIR, "upload_filtered.pcap")
 
   runEngine(input, output, req.file.originalname, res)
 })
@@ -182,6 +211,7 @@ app.get("/health", (req, res) => {
   })
 })
 
-app.listen(4000, () => {
-  console.log("DPI Control Plane running on port 4000")
+
+server.listen(4000, () => {
+  console.log("DPI Control Plane running on port 4000 (WebSocket enabled)")
 })

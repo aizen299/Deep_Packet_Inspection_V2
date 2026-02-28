@@ -14,6 +14,7 @@ import { Bar, Doughnut, Pie } from "react-chartjs-2"
 import ChartDataLabels from "chartjs-plugin-datalabels"
 import { motion } from "framer-motion"
 import * as THREE from "three"
+import { io } from "socket.io-client"
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend, ChartDataLabels, {
   id: "centerText",
@@ -41,37 +42,43 @@ export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
-    const runAnalysis = async () => {
+    const socket = io("http://localhost:4000")
+
+    socket.on("connect", async () => {
+      console.log("Connected to backend via WebSocket")
+
       try {
         await fetch("http://localhost:4000/analyze", {
-          method: "POST",
+          method: "POST"
         })
       } catch (err) {
-        console.error("Failed to start analysis:", err)
+        console.error("Auto-analyze failed:", err)
       }
-    }
+    })
 
-    const fetchStats = async () => {
-      try {
-        const res = await fetch("http://localhost:4000/stats")
-        const json = await res.json()
-        if (json.success) {
+    // Fetch latest cached stats on first load
+    fetch("http://localhost:4000/stats")
+      .then(res => res.json())
+      .then(json => {
+        if (json.success && json.data) {
           setStats(json.data)
-        } else {
-          console.error("API error:", json.message)
         }
-      } catch (err) {
-        console.error("Backend unreachable:", err)
-      }
+      })
+      .catch(err => {
+        console.error("Failed to fetch initial stats:", err)
+      })
+
+    socket.on("stats_update", (data: any) => {
+      setStats(data)
+    })
+
+    socket.on("disconnect", () => {
+      console.log("WebSocket disconnected")
+    })
+
+    return () => {
+      socket.disconnect()
     }
-
-    // Run engine once on load
-    runAnalysis().then(fetchStats)
-
-    // Then poll only cached stats
-    const interval = setInterval(fetchStats, 5000)
-
-    return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {
@@ -180,9 +187,9 @@ export default function Home() {
     udp_packets: 0
   }
   const apps = stats.applications || stats.app_breakdown || {}
-  const riskLevel = stats.risk_level || "Low"
-  const riskScore = stats.risk_score ?? 0
-  const anomalies: string[] = stats.anomalies || []
+  const riskLevel = stats.ml?.risk_level || "Low"
+  const riskScore = stats.ml?.risk_score ?? 0
+  const anomalies: string[] = stats.ml?.anomalies || []
 
   const riskColor =
     riskLevel === "High"
@@ -340,6 +347,7 @@ export default function Home() {
       const json = await res.json()
 
       if (json.success) {
+        // Immediately update UI to avoid race conditions
         setStats(json.data)
       } else {
         console.error("Upload API error:", json.message)
