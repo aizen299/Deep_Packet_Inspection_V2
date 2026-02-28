@@ -20,10 +20,15 @@ PCAP File
 C++ DPI Engine (Multi-threaded)
    │
    ▼
-Node.js REST API (Control Plane)
+Node.js Control Plane (REST + WebSocket)
+   │
+   ├──► ML Microservice (FastAPI)
+   │        │
+   │        ▼
+   │   Risk Scoring + Anomaly Detection
    │
    ▼
-Next.js Dashboard (Analytics UI)
+Next.js Dashboard (Real-time Analytics UI)
 ```
 
 Containerized deployment:
@@ -210,10 +215,13 @@ npm run dev
 
 This project is fully containerized.
 
-Two containers are used:
+Three containers are used:
 
-- **Backend container** (C++ Engine + Express API)
-- **Dashboard container** (Next.js UI)
+- **Backend container** (C++ Engine + Express API + WebSocket)
+- **ML container** (FastAPI inference service)
+- **Dashboard container** (Next.js analytics UI)
+
+All services communicate over an internal Docker network.
 
 ## Build and Run
 
@@ -236,28 +244,6 @@ curl http://localhost:4000/health
 
 ---
 
-# 📁 Project Structure
-
-```
-Packet_analyzer/
-│
-├── backend/
-│   ├── data/
-│   ├── output/
-│   ├── include/
-│   ├── src/
-│   ├── api/
-│   ├── Dockerfile
-│   └── build.sh
-│
-├── dashboard/
-│   ├── Dockerfile
-│   └── src/
-│
-├── docker-compose.yml
-├── LICENSE
-└── README.md
-```
 
 ---
 
@@ -267,15 +253,20 @@ Packet_analyzer/
 - Burst detection heuristics  
 - Suspicious traffic identification  
 - Application frequency analytics  
-- Structured API integration  
+- ML-based anomaly scoring  
+- Real-time WebSocket streaming  
+- Risk classification (Low / Medium / High)  
+- Containerized microservice orchestration  
+- Structured API + inference integration  
 
 Future extensions:
 
-- Real-time packet capture mode  
-- ML-based anomaly detection  
-- WebSocket live updates  
-- Prometheus metrics  
-- Cloud deployment  
+- Live packet capture mode (libpcap integration)
+- Distributed scaling with Kubernetes
+- Prometheus + Grafana observability stack
+- Persistent storage for historical trend analysis
+- CI/CD pipeline with automated container builds
+- Cloud-native deployment (AWS / GCP / Azure)
 
 ---
 
@@ -290,6 +281,10 @@ This project demonstrates:
 - Modern frontend analytics integration  
 - Containerized deployment architecture  
 - Full-stack systems engineering  
+- Microservice-based ML deployment
+- Service-to-service communication design
+- Real-time analytics streaming architecture
+- Production-grade container orchestration mindset
 
 ---
 
