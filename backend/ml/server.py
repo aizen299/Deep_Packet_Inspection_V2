@@ -36,7 +36,7 @@ model = load_or_train_model()
 
 @app.post("/predict")
 def predict(features: FeatureInput):
-    X = np.array([[
+    raw = np.array([[ 
         features.total_packets,
         features.total_bytes,
         features.tcp_ratio,
@@ -48,6 +48,16 @@ def predict(features: FeatureInput):
         features.drop_rate,
         features.packets_per_connection
     ]])
+
+    # Basic normalization to align with training distribution (~0-1 range)
+    scaled = raw.copy()
+    scaled[:, 0] /= 10000.0      # total_packets
+    scaled[:, 1] /= 1000000.0    # total_bytes
+    scaled[:, 6] /= 50.0         # unique_app_count
+    scaled[:, 7] /= 5000.0       # active_connections
+    scaled[:, 9] /= 100.0        # packets_per_connection
+
+    X = scaled
 
     score = model.decision_function(X)[0]
     anomaly = model.predict(X)[0]  # -1 = anomaly
@@ -72,8 +82,17 @@ def predict(features: FeatureInput):
     if features.active_connections > 100:
         explanations.append("High connection count spike")
 
+    confidence = float(abs(score))
+
     return {
         "risk_score": risk_score,
         "risk_level": risk_level,
+        "confidence": confidence,
         "anomalies": explanations
     }
+
+
+# Health endpoint
+@app.get("/health")
+def health():
+    return {"status": "ok"}

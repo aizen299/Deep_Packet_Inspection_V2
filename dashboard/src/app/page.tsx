@@ -34,6 +34,7 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Le
 })
 
 export default function Home() {
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
   const [stats, setStats] = useState<any>(null)
   const [darkMode, setDarkMode] = useState(true)
   const [mouse, setMouse] = useState({ x: 0, y: 0 })
@@ -42,13 +43,13 @@ export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
-    const socket = io("http://localhost:4000")
+    const socket = io(API_URL)
 
     socket.on("connect", async () => {
       console.log("Connected to backend via WebSocket")
 
       try {
-        await fetch("http://localhost:4000/analyze", {
+        await fetch(`${API_URL}/analyze`, {
           method: "POST"
         })
       } catch (err) {
@@ -57,7 +58,7 @@ export default function Home() {
     })
 
     // Fetch latest cached stats on first load
-    fetch("http://localhost:4000/stats")
+    fetch(`${API_URL}/stats`)
       .then(res => res.json())
       .then(json => {
         if (json.success && json.data) {
@@ -307,7 +308,7 @@ export default function Home() {
       datalabels: {
         color: textColor,
         font: {
-          weight: "bold",
+          weight: "bold" as const,
           size: 14
         },
         formatter: (value: number, context: any) => {
@@ -339,7 +340,7 @@ export default function Home() {
     formData.append("pcap", file)
 
     try {
-      const res = await fetch("http://localhost:4000/upload", {
+      const res = await fetch(`${API_URL}/upload`, {
         method: "POST",
         body: formData,
       })

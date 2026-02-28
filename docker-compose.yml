@@ -1,11 +1,20 @@
-version: "3.9"
-
 services:
+  ml:
+    build: ./backend/ml
+    container_name: dpi_ml
+    ports:
+      - "5050:5050"
+    restart: unless-stopped
+
   backend:
     build: ./backend
     container_name: dpi_backend
     ports:
       - "4000:4000"
+    environment:
+      - ML_SERVICE_URL=http://ml:5050
+    depends_on:
+      - ml
     restart: unless-stopped
 
   dashboard:
