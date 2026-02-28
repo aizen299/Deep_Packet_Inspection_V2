@@ -10,11 +10,27 @@ import {
   Tooltip,
   Legend,
 } from "chart.js"
-import { Bar, Pie } from "react-chartjs-2"
+import { Bar, Doughnut, Pie } from "react-chartjs-2"
+import ChartDataLabels from "chartjs-plugin-datalabels"
 import { motion } from "framer-motion"
 import * as THREE from "three"
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend)
+ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend, ChartDataLabels, {
+  id: "centerText",
+  beforeDraw(chart: any) {
+    const { ctx, chartArea } = chart
+    if (!chartArea) return
+    const centerX = (chartArea.left + chartArea.right) / 2
+    const centerY = (chartArea.top + chartArea.bottom) / 2
+    ctx.save()
+    ctx.textAlign = "center"
+    ctx.textBaseline = "middle"
+    ctx.font = "bold 22px sans-serif"
+    ctx.fillStyle = chart.options.plugins.centerText?.color || "#fff"
+    ctx.fillText(chart.options.plugins.centerText?.text || "", centerX, centerY)
+    ctx.restore()
+  }
+})
 
 export default function Home() {
   const [stats, setStats] = useState<any>(null)
@@ -164,6 +180,21 @@ export default function Home() {
     udp_packets: 0
   }
   const apps = stats.applications || stats.app_breakdown || {}
+  const riskLevel = stats.risk_level || "Low"
+  const riskScore = stats.risk_score ?? 0
+  const anomalies: string[] = stats.anomalies || []
+
+  const riskColor =
+    riskLevel === "High"
+      ? "bg-red-500"
+      : riskLevel === "Medium"
+      ? "bg-yellow-500"
+      : "bg-emerald-500"
+
+  const tcpRatio =
+    summary.total_packets > 0
+      ? summary.tcp_packets / summary.total_packets
+      : 0
   const sortedApps = Object.entries(apps).sort(
     (a, b) => ((b[1] as any)?.count ?? 0) - ((a[1] as any)?.count ?? 0)
   )
@@ -243,11 +274,48 @@ export default function Home() {
     labels: ["TCP", "UDP"],
     datasets: [{
       data: [summary.tcp_packets, summary.udp_packets],
-      backgroundColor: darkMode
-        ? ["#00f5ff", "#ff3cac"]
-        : ["#2563eb", "#9333ea"],
+      backgroundColor:
+        tcpRatio > 0.9
+          ? ["#ff3b3b", "#444444"]
+          : darkMode
+            ? ["#00f5ff", "#ff3cac"]
+            : ["#2563eb", "#9333ea"],
       borderWidth: 0,
+      cutout: "70%",
     }],
+  }
+
+  const pieOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        labels: {
+          color: textColor,
+          font: {
+            size: 14
+          }
+        }
+      },
+      datalabels: {
+        color: textColor,
+        font: {
+          weight: "bold",
+          size: 14
+        },
+        formatter: (value: number, context: any) => {
+          const total = context.chart.data.datasets[0].data
+            .reduce((a: number, b: number) => a + b, 0)
+          if (!total) return "0%"
+          const percent = ((value / total) * 100).toFixed(1)
+          return percent + "%"
+        }
+      },
+      centerText: {
+        text: summary.total_packets.toString(),
+        color: textColor
+      }
+    }
   }
 
   const exportJSON = () => {
@@ -344,7 +412,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-10 mb-14">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-10 mb-14">
           {[["Packets", summary.total_packets], ["Bytes", summary.total_bytes], ["TCP", summary.tcp_packets], ["UDP", summary.udp_packets]].map(([label, value]) => (
             <motion.div
               key={label as string}
@@ -373,9 +441,47 @@ export default function Home() {
               <p className="text-3xl font-bold mt-3">{Number(value).toLocaleString()}</p>
             </motion.div>
           ))}
+          <motion.div
+            key="Risk"
+            className={`${glass} p-8 rounded-3xl`}
+            whileHover={{
+              scale: 1.05,
+              rotateX: -mouse.y * 0.2,
+              rotateY: mouse.x * 0.2,
+              boxShadow: "0 0 60px rgba(255,0,0,0.35)"
+            }}
+            transition={{ type: "spring", stiffness: 200, damping: 15 }}
+            style={{
+              transformStyle: "preserve-3d",
+              perspective: 1000,
+              background: `radial-gradient(circle at ${50 + mouse.x}% ${50 + mouse.y}%, rgba(255,255,255,0.35), rgba(255,255,255,0.08))`,
+              backdropFilter: "blur(30px)",
+            }}
+          >
+            <div className="absolute inset-0 pointer-events-none opacity-30"
+              style={{
+                background: `radial-gradient(circle at ${50 - mouse.x}% ${50 - mouse.y}%, rgba(255,0,0,0.4), transparent 60%)`
+              }}
+            />
+            <p className="text-sm opacity-70">Risk Level</p>
+            <div className="flex items-center gap-3 mt-3">
+              <span
+                className={`px-3 py-1 text-xs rounded-full text-white ${riskColor} ${
+                  riskLevel === "High"
+                    ? "animate-pulse shadow-[0_0_20px_rgba(255,0,0,0.8)]"
+                    : ""
+                }`}
+              >
+                {riskLevel}
+              </span>
+              <span className="text-sm opacity-70">
+                Score: {riskScore.toFixed(2)}
+              </span>
+            </div>
+          </motion.div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-12">
           <section className={`${glass} p-10 rounded-3xl col-span-2 hover:shadow-[0_0_80px_rgba(255,255,255,0.25)] transition-all duration-500`}>
             <h2 className="text-lg mb-6 opacity-80">Application Distribution</h2>
             <div className="h-[520px] bg-white/15 dark:bg-white/10 backdrop-blur-2xl rounded-2xl p-6 border border-white/20 shadow-inner">
@@ -386,7 +492,24 @@ export default function Home() {
           <section className={`${glass} p-10 rounded-3xl hover:shadow-[0_0_80px_rgba(255,255,255,0.25)] transition-all duration-500`}>
             <h2 className="text-lg mb-6 opacity-80">Protocol Split</h2>
             <div className="h-[320px] bg-white/15 dark:bg-white/10 backdrop-blur-2xl rounded-2xl p-6 border border-white/20 shadow-inner flex items-center justify-center">
-              <Pie data={pieData} />
+              <Doughnut data={pieData} options={pieOptions} />
+            </div>
+          </section>
+          <section className={`${glass} p-10 rounded-3xl hover:shadow-[0_0_80px_rgba(255,0,0,0.25)] transition-all duration-500`}>
+            <h2 className="text-lg mb-6 opacity-80">Detected Anomalies</h2>
+            <div className="space-y-4">
+              {anomalies.length === 0 ? (
+                <p className="opacity-60 text-sm">No anomalies detected.</p>
+              ) : (
+                anomalies.map((a, i) => (
+                  <div
+                    key={i}
+                    className="px-4 py-3 rounded-xl bg-red-500/20 border border-red-500/40 text-sm"
+                  >
+                    {a}
+                  </div>
+                ))
+              )}
             </div>
           </section>
         </div>

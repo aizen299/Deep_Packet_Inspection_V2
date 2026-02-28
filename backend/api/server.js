@@ -4,6 +4,7 @@ import { exec } from "child_process"
 import multer from "multer"
 import path from "path"
 import { fileURLToPath } from "url"
+import axios from "axios"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -71,7 +72,7 @@ function runEngine(inputPath, outputPath, inputLabel, res) {
 
   const command = `"${ENGINE_PATH}" "${inputPath}" "${outputPath}" --json`
 
-  exec(command, (error, stdout, stderr) => {
+  exec(command, async (error, stdout, stderr) => {
     engineBusy = false
     const duration = Date.now() - start
 
@@ -95,7 +96,52 @@ function runEngine(inputPath, outputPath, inputLabel, res) {
 
       cachedStats = enrichStats(raw, inputLabel)
 
-      res.json({ success: true, data: cachedStats })
+      // ---- ML Feature Extraction ----
+      const totalPackets = raw.packet_stats.total_packets
+      const tcpPackets = raw.packet_stats.tcp_packets
+      const udpPackets = raw.packet_stats.udp_packets
+      const apps = raw.applications || {}
+
+      const tcpRatio = totalPackets > 0 ? tcpPackets / totalPackets : 0
+      const udpRatio = totalPackets > 0 ? udpPackets / totalPackets : 0
+      const unknownRatio = apps["Unknown"] ? apps["Unknown"].percentage / 100 : 0
+      const dnsRatio = apps["DNS"] ? apps["DNS"].percentage / 100 : 0
+      const uniqueAppCount = Object.keys(apps).length
+      const activeConnections = raw.fast_path?.active_connections || 0
+      const dropRate = raw.filtering?.drop_rate || 0
+      const packetsPerConnection =
+        activeConnections > 0 ? totalPackets / activeConnections : 0
+
+      const featureVector = {
+        total_packets: totalPackets,
+        total_bytes: raw.packet_stats.total_bytes,
+        tcp_ratio: tcpRatio,
+        udp_ratio: udpRatio,
+        unknown_ratio: unknownRatio,
+        dns_ratio: dnsRatio,
+        unique_app_count: uniqueAppCount,
+        active_connections: activeConnections,
+        drop_rate: dropRate,
+        packets_per_connection: packetsPerConnection,
+      }
+
+      let mlResult = null
+
+      try {
+        const mlResponse = await axios.post(
+          "http://localhost:5050/predict",
+          featureVector
+        )
+        mlResult = mlResponse.data
+      } catch (mlErr) {
+        console.error("ML service error:", mlErr.message)
+      }
+
+      res.json({
+        success: true,
+        data: cachedStats,
+        ml: mlResult,
+      })
     } catch (e) {
       console.error("JSON parse error:", e)
       console.error("stdout:", stdout)
