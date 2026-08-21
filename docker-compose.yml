@@ -2,8 +2,18 @@ services:
   ml:
     build: ./backend/ml
     container_name: dpi_ml
-    ports:
-      - "5050:5050"
+    # Not published to the host: only the backend needs to reach this service.
+    expose:
+      - "5050"
+    environment:
+      - API_KEY=${API_KEY:-dev-local-key}
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5050/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   backend:
@@ -13,15 +23,33 @@ services:
       - "4000:4000"
     environment:
       - ML_SERVICE_URL=http://ml:5050
+      - BIND_HOST=0.0.0.0
+      - ALLOWED_ORIGINS=http://localhost:3000
+      - API_KEY=${API_KEY:-dev-local-key}
     depends_on:
-      - ml
+      ml:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL",
+             "node -e \"fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
     restart: unless-stopped
 
   dashboard:
-    build: ./dashboard
+    build:
+      context: ./dashboard
+      args:
+        # Inlined into the client bundle at build time -- the browser resolves
+        # this, so it is the host-published address, not the compose service name.
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+        - NEXT_PUBLIC_API_KEY=${API_KEY:-dev-local-key}
     container_name: dpi_dashboard
     ports:
       - "3000:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
