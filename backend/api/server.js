@@ -10,6 +10,14 @@ import axios from "axios"
 import http from "http"
 import { Server } from "socket.io"
 
+import {
+  buildFeatureVector,
+  detectSuspicious,
+  hasCaptureMagic,
+  normaliseServiceUrl,
+  validateEngineReport,
+} from "./lib.js"
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -36,18 +44,9 @@ const API_KEY = process.env.API_KEY || ""
 // secret configures the whole stack, but can be set separately.
 const ML_API_KEY = process.env.ML_API_KEY || process.env.API_KEY || ""
 
-// Platform service discovery (Render's `fromService: hostport`) yields a bare
-// "host:port", which axios rejects as a relative URL. Remote hosts get https,
-// since the request carries ML_API_KEY and may cross the public internet;
-// only loopback falls back to http.
-const ML_SERVICE_URL = (() => {
-  const raw = process.env.ML_SERVICE_URL || "http://localhost:5050"
-  if (/^https?:\/\//.test(raw)) return raw
-
-  const host = raw.split(":")[0]
-  const isLocal = host === "localhost" || host === "127.0.0.1" || !host.includes(".")
-  return `${isLocal ? "http" : "https"}://${raw}`
-})()
+// Accepts a bare "host:port" from platform service discovery; see lib.js for
+// why remote hosts are forced to https.
+const ML_SERVICE_URL = normaliseServiceUrl(process.env.ML_SERVICE_URL)
 
 // Generous by default: a scorer on an idle-suspending host can take tens of
 // seconds to wake, and a timeout here degrades silently to a null ML verdict.
@@ -175,28 +174,6 @@ const upload = multer({
   },
 })
 
-// libpcap and pcapng magic numbers, both endiannesses.
-const CAPTURE_MAGICS = new Set([
-  0xa1b2c3d4, 0xd4c3b2a1, // pcap, us resolution
-  0xa1b23c4d, 0x4d3cb2a1, // pcap, ns resolution
-  0x0a0d0d0a,             // pcapng section header block
-])
-
-function hasCaptureMagic(filePath) {
-  let fd
-  try {
-    fd = fs.openSync(filePath, "r")
-    const buf = Buffer.alloc(4)
-    const read = fs.readSync(fd, buf, 0, 4, 0)
-    if (read < 4) return false
-    return CAPTURE_MAGICS.has(buf.readUInt32BE(0))
-  } catch {
-    return false
-  } finally {
-    if (fd !== undefined) fs.closeSync(fd)
-  }
-}
-
 function safeUnlink(filePath) {
   if (!filePath) return
   fs.unlink(filePath, (err) => {
@@ -220,26 +197,6 @@ const ENGINE_PATH = path.join(__dirname, "../build/bin/dpi_engine")
 const OUTPUT_DIR = path.join(__dirname, "../output")
 fs.mkdirSync(OUTPUT_DIR, { recursive: true })
 
-function detectSuspicious(data) {
-  if (!data?.applications) return null
-
-  let maxApp = null
-  let maxCount = 0
-
-  for (const [name, obj] of Object.entries(data.applications)) {
-    if (obj.count > maxCount) {
-      maxApp = name
-      maxCount = obj.count
-    }
-  }
-
-  return {
-    top_app: maxApp,
-    peak_packets: maxCount,
-    flagged: maxCount > 40,
-  }
-}
-
 function enrichStats(rawData, inputFile) {
   const suspicious = detectSuspicious(rawData)
 
@@ -254,52 +211,6 @@ function enrichStats(rawData, inputFile) {
   }
 }
 
-// The engine's JSON is an untyped cross-process contract; verify the fields we
-// index before using them so a shape change reports as such instead of
-// surfacing as a misleading "JSON parse failed".
-function validateEngineReport(raw) {
-  if (!raw || typeof raw !== "object") return "report is not an object"
-  if (!raw.packet_stats || typeof raw.packet_stats !== "object") {
-    return "missing packet_stats"
-  }
-  for (const field of ["total_packets", "total_bytes", "tcp_packets", "udp_packets"]) {
-    if (typeof raw.packet_stats[field] !== "number") {
-      return `packet_stats.${field} is not a number`
-    }
-  }
-  return null
-}
-
-function buildFeatureVector(raw) {
-  const totalPackets = raw.packet_stats.total_packets
-  const tcpPackets = raw.packet_stats.tcp_packets
-  const udpPackets = raw.packet_stats.udp_packets
-  const apps = raw.applications || {}
-
-  const tcpRatio = totalPackets > 0 ? tcpPackets / totalPackets : 0
-  const udpRatio = totalPackets > 0 ? udpPackets / totalPackets : 0
-  const unknownRatio = apps["Unknown"] ? apps["Unknown"].percentage / 100 : 0
-  const dnsRatio = apps["DNS"] ? apps["DNS"].percentage / 100 : 0
-  const uniqueAppCount = Object.keys(apps).length
-  const activeConnections = raw.fast_path?.active_connections || 0
-  const dropRate = raw.filtering?.drop_rate || 0
-  const packetsPerConnection =
-    activeConnections > 0 ? totalPackets / activeConnections : 0
-
-  // NOTE: the ML service indexes these positionally -- do not reorder.
-  return {
-    total_packets: totalPackets,
-    total_bytes: raw.packet_stats.total_bytes,
-    tcp_ratio: tcpRatio,
-    udp_ratio: udpRatio,
-    unknown_ratio: unknownRatio,
-    dns_ratio: dnsRatio,
-    unique_app_count: uniqueAppCount,
-    active_connections: activeConnections,
-    drop_rate: dropRate,
-    packets_per_connection: packetsPerConnection,
-  }
-}
 
 function runEngine(inputPath, outputPath, inputLabel, res, onComplete = () => {}) {
   if (engineBusy) {

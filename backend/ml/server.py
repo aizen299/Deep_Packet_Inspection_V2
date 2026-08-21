@@ -85,6 +85,10 @@ _artifact = load_or_train_model()
 model = _artifact["pipeline"]
 TRAIN_SCORES = _artifact["train_scores"]
 
+# Target false-positive rates on benign traffic. See the note in predict().
+HIGH_THRESHOLD = float(os.environ.get("ML_HIGH_THRESHOLD", 0.99))
+MEDIUM_THRESHOLD = float(os.environ.get("ML_MEDIUM_THRESHOLD", 0.95))
+
 @app.post("/predict")
 def predict(features: FeatureInput, x_api_key: str | None = Header(default=None)):
     require_api_key(x_api_key)
@@ -109,10 +113,14 @@ def predict(features: FeatureInput, x_api_key: str | None = Header(default=None)
     risk_score = float(np.searchsorted(TRAIN_SCORES, score) / len(TRAIN_SCORES))
     risk_score = max(0.0, min(1.0, 1.0 - risk_score))
 
+    # Because risk_score is a percentile of the benign training distribution, it
+    # is uniform over benign traffic -- so each threshold *is* its own false
+    # positive rate. High at 0.99 means roughly 1 benign capture in 100 gets
+    # flagged; at the more intuitive-looking 0.9 it would be 1 in 10.
     risk_level = "Low"
-    if risk_score > 0.9:
+    if risk_score > HIGH_THRESHOLD:
         risk_level = "High"
-    elif risk_score > 0.7:
+    elif risk_score > MEDIUM_THRESHOLD:
         risk_level = "Medium"
 
     explanations = []

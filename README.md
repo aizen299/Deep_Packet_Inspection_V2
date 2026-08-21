@@ -107,6 +107,19 @@ cp .env.example .env.local
 npm run dev
 ```
 
+### Tests
+
+Both suites use stdlib runners, so there is no test dependency to install:
+
+```
+cd backend/api && npm test
+cd backend/ml  && python -m unittest discover -p 'test_*.py'
+```
+
+CI (`.github/workflows/ci.yml`) additionally builds the C++ engine, runs it
+against a generated capture to check the JSON contract the API depends on, and
+verifies both services refuse to start without `API_KEY`.
+
 ### Run the engine directly
 
 ```
