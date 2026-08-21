@@ -216,9 +216,16 @@ std::optional<std::string> QUICSNIExtractor::extract(const uint8_t* payload, siz
         return std::nullopt;
     }
     
-    for (size_t i = 0; i + 50 < length; i++) {
+    // Scan for a candidate CRYPTO frame and hand the enclosing bytes to the TLS
+    // parser. Start at 5 so the `i - 5` rewind can never underflow: `i` is
+    // unsigned, so i < 5 previously produced a huge value and an out-of-bounds
+    // pointer. QUIC v1 puts 0x01 at byte 4 (version field), so that was reachable
+    // with ordinary traffic. The remaining length is derived from the same offset
+    // -- `length - i + 5` overstated it and let the TLS parser read past the end.
+    for (size_t i = 5; i + 50 < length; i++) {
         if (payload[i] == 0x01) {
-            auto result = SNIExtractor::extract(payload + i - 5, length - i + 5);
+            const size_t offset = i - 5;
+            auto result = SNIExtractor::extract(payload + offset, length - offset);
             if (result) return result;
         }
     }

@@ -12,6 +12,8 @@ ConnectionTracker::ConnectionTracker(int fp_id, size_t max_connections)
 }
 
 Connection* ConnectionTracker::getOrCreateConnection(const FiveTuple& tuple) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
     auto it = connections_.find(tuple);
     
     if (it != connections_.end()) {
@@ -40,6 +42,8 @@ Connection* ConnectionTracker::getOrCreateConnection(const FiveTuple& tuple) {
 }
 
 Connection* ConnectionTracker::getConnection(const FiveTuple& tuple) {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+
     auto it = connections_.find(tuple);
     if (it != connections_.end()) {
         return &it->second;
@@ -56,7 +60,9 @@ Connection* ConnectionTracker::getConnection(const FiveTuple& tuple) {
 
 void ConnectionTracker::updateConnection(Connection* conn, size_t packet_size, bool is_outbound) {
     if (!conn) return;
-    
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
     conn->last_seen = std::chrono::steady_clock::now();
     
     if (is_outbound) {
@@ -81,7 +87,9 @@ void ConnectionTracker::updateConnection(Connection* conn, size_t packet_size, b
 
 void ConnectionTracker::classifyConnection(Connection* conn, AppType app, const std::string& sni) {
     if (!conn) return;
-    
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
     if (conn->state != ConnectionState::CLASSIFIED) {
         conn->app_type = app;
         conn->sni = sni;
@@ -92,13 +100,17 @@ void ConnectionTracker::classifyConnection(Connection* conn, AppType app, const 
 
 void ConnectionTracker::blockConnection(Connection* conn) {
     if (!conn) return;
-    
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
     conn->state = ConnectionState::BLOCKED;
     conn->action = PacketAction::DROP;
     blocked_count_++;
 }
 
 void ConnectionTracker::closeConnection(const FiveTuple& tuple) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
     auto it = connections_.find(tuple);
     if (it != connections_.end()) {
         it->second.state = ConnectionState::CLOSED;
@@ -108,6 +120,8 @@ void ConnectionTracker::closeConnection(const FiveTuple& tuple) {
 }
 
 size_t ConnectionTracker::cleanupStale(std::chrono::seconds timeout) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
     auto now = std::chrono::steady_clock::now();
     size_t removed = 0;
     
@@ -128,6 +142,8 @@ size_t ConnectionTracker::cleanupStale(std::chrono::seconds timeout) {
 }
 
 std::vector<Connection> ConnectionTracker::getAllConnections() const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+
     std::vector<Connection> result;
     result.reserve(connections_.size());
     
@@ -139,10 +155,14 @@ std::vector<Connection> ConnectionTracker::getAllConnections() const {
 }
 
 size_t ConnectionTracker::getActiveCount() const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+
     return connections_.size();
 }
 
 ConnectionTracker::TrackerStats ConnectionTracker::getStats() const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+
     TrackerStats stats;
     stats.active_connections = connections_.size();
     stats.total_connections_seen = total_seen_;
@@ -156,15 +176,71 @@ ConnectionTracker::TrackerStats ConnectionTracker::getStats() const {
 }
 
 void ConnectionTracker::clear() {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
     connections_.clear();
     lru_list_.clear();
     lru_index_.clear();
 }
 
 void ConnectionTracker::forEach(std::function<void(const Connection&)> callback) const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+
     for (const auto& pair : connections_) {
         callback(pair.second);
     }
+}
+
+void ConnectionTracker::updateTcpState(Connection* conn, uint8_t tcp_flags) {
+    if (!conn) return;
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
+    constexpr uint8_t SYN = 0x02;
+    constexpr uint8_t ACK = 0x10;
+    constexpr uint8_t FIN = 0x01;
+    constexpr uint8_t RST = 0x04;
+
+    if (tcp_flags & SYN) {
+        if (tcp_flags & ACK) {
+            conn->syn_ack_seen = true;
+        } else {
+            conn->syn_seen = true;
+        }
+    }
+
+    if (conn->syn_seen && conn->syn_ack_seen && (tcp_flags & ACK)) {
+        if (conn->state == ConnectionState::NEW) {
+            conn->state = ConnectionState::ESTABLISHED;
+        }
+    }
+
+    if (tcp_flags & FIN) {
+        conn->fin_seen = true;
+    }
+
+    if (tcp_flags & RST) {
+        conn->state = ConnectionState::CLOSED;
+    }
+
+    if (conn->fin_seen && (tcp_flags & ACK)) {
+        conn->state = ConnectionState::CLOSED;
+    }
+}
+
+ConnectionState ConnectionTracker::getState(const Connection* conn) const {
+    if (!conn) return ConnectionState::NEW;
+
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    return conn->state;
+}
+
+ConnectionTracker::Classification
+ConnectionTracker::getClassification(const Connection* conn) const {
+    if (!conn) return {AppType::UNKNOWN, ""};
+
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    return {conn->app_type, conn->sni};
 }
 
 void ConnectionTracker::evictOldest() {

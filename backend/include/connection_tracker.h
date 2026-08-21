@@ -13,21 +13,44 @@
 
 namespace DPI {
 
+// Thread-safety contract:
+//   Every public method takes `mutex_` (exclusive for mutators, shared for
+//   readers), so reporting threads may safely call the const accessors while the
+//   owning fast-path thread is still processing packets.
+//
+//   The `Connection*` handles returned below belong to the owning fast-path
+//   thread. Pass them back into this tracker's methods; never dereference one
+//   directly, from any thread. std::unordered_map is node-based, so a handle
+//   stays valid until its entry is erased -- which only happens via evictOldest()
+//   or cleanupStale(), both on the owning thread.
 class ConnectionTracker {
 public:
     ConnectionTracker(int fp_id, size_t max_connections = 100000);
-    
+
     Connection* getOrCreateConnection(const FiveTuple& tuple);
-    
+
     Connection* getConnection(const FiveTuple& tuple);
-    
+
     void updateConnection(Connection* conn, size_t packet_size, bool is_outbound);
-    
+
     void classifyConnection(Connection* conn, AppType app, const std::string& sni);
-    
+
     void blockConnection(Connection* conn);
-    
+
     void closeConnection(const FiveTuple& tuple);
+
+    // Advances the TCP handshake/teardown state machine. Lives here rather than
+    // in FastPathProcessor so the mutation happens under the lock.
+    void updateTcpState(Connection* conn, uint8_t tcp_flags);
+
+    // Locked single-connection reads, for callers holding a handle.
+    ConnectionState getState(const Connection* conn) const;
+
+    struct Classification {
+        AppType app_type;
+        std::string sni;
+    };
+    Classification getClassification(const Connection* conn) const;
     
     size_t cleanupStale(std::chrono::seconds timeout = std::chrono::seconds(300));
     
@@ -68,7 +91,10 @@ private:
     int fp_id_;
     size_t max_connections_;
 
-    
+    // Guards every member below. Public methods lock it; the private helpers
+    // assume the caller already holds it exclusively.
+    mutable std::shared_mutex mutex_;
+
     std::unordered_map<FiveTuple, Connection, FiveTupleHash> connections_;
 
     
