@@ -94,7 +94,6 @@ private:
     
     PacketAction checkRules(const PacketJob& job, Connection* conn);
     
-    void updateTCPState(Connection* conn, uint8_t tcp_flags);
     
     void updateQueueMetrics();
 };

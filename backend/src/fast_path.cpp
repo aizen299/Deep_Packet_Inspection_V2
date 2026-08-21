@@ -83,14 +83,16 @@ PacketAction FastPathProcessor::processPacket(PacketJob& job) {
     conn_tracker_.updateConnection(conn, job.data.size(), is_outbound);
     
     if (job.tuple.protocol == 6) {
-        updateTCPState(conn, job.tcp_flags);
+        conn_tracker_.updateTcpState(conn, job.tcp_flags);
     }
-    
-    if (conn->state == ConnectionState::BLOCKED) {
+
+    ConnectionState state = conn_tracker_.getState(conn);
+
+    if (state == ConnectionState::BLOCKED) {
         return PacketAction::DROP;
     }
-    
-    if (conn->state != ConnectionState::CLASSIFIED && job.payload_length > 0) {
+
+    if (state != ConnectionState::CLASSIFIED && job.payload_length > 0) {
         inspectPayload(job, conn);
     }
     
@@ -186,11 +188,13 @@ PacketAction FastPathProcessor::checkRules(const PacketJob& job, Connection* con
     
     uint32_t src_ip = job.tuple.src_ip;
     
+    auto classification = conn_tracker_.getClassification(conn);
+
     auto block_reason = rule_manager_->shouldBlock(
         src_ip,
         job.tuple.dst_port,
-        conn->app_type,
-        conn->sni
+        classification.app_type,
+        classification.sni
     );
     
     if (block_reason) {
@@ -222,39 +226,6 @@ PacketAction FastPathProcessor::checkRules(const PacketJob& job, Connection* con
     }
     
     return PacketAction::FORWARD;
-}
-
-void FastPathProcessor::updateTCPState(Connection* conn, uint8_t tcp_flags) {
-    constexpr uint8_t SYN = 0x02;
-    constexpr uint8_t ACK = 0x10;
-    constexpr uint8_t FIN = 0x01;
-    constexpr uint8_t RST = 0x04;
-    
-    if (tcp_flags & SYN) {
-        if (tcp_flags & ACK) {
-            conn->syn_ack_seen = true;
-        } else {
-            conn->syn_seen = true;
-        }
-    }
-    
-    if (conn->syn_seen && conn->syn_ack_seen && (tcp_flags & ACK)) {
-        if (conn->state == ConnectionState::NEW) {
-            conn->state = ConnectionState::ESTABLISHED;
-        }
-    }
-    
-    if (tcp_flags & FIN) {
-        conn->fin_seen = true;
-    }
-    
-    if (tcp_flags & RST) {
-        conn->state = ConnectionState::CLOSED;
-    }
-    
-    if (conn->fin_seen && (tcp_flags & ACK)) {
-        conn->state = ConnectionState::CLOSED;
-    }
 }
 
 FastPathProcessor::FPStats FastPathProcessor::getStats() const {
