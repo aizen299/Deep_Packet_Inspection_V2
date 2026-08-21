@@ -46,7 +46,7 @@ export default function Home() {
       `${snapshot.packets.total_packets.toLocaleString()} packets`,
       `${formatBytes(snapshot.packets.total_bytes)} inspected`,
       `${snapshot.activeConnections.toLocaleString()} flows tracked`,
-      `Risk ${snapshot.ml.risk_level.toUpperCase()}`,
+      snapshot.ml ? `Risk ${snapshot.ml.risk_level.toUpperCase()}` : "Risk unscored",
       `Drop rate ${snapshot.filtering.drop_rate.toFixed(2)}%`,
       `${snapshot.apps.length} applications classified`,
       `Run ${snapshot.durationMs} ms`,
@@ -211,7 +211,7 @@ export default function Home() {
             <section className="slab mb-10 relative overflow-hidden p-8">
               <div
                 className="absolute inset-y-0 left-0 w-2"
-                style={{ background: RISK_COLOR[risk!.risk_level] }}
+                style={{ background: risk ? RISK_COLOR[risk.risk_level] : "var(--ink-dim)" }}
               />
               <div className="flex flex-wrap items-center justify-between gap-8">
                 <div>
@@ -220,28 +220,35 @@ export default function Home() {
                   </p>
                   <p
                     className="display mt-2 text-7xl"
-                    style={{ color: RISK_COLOR[risk!.risk_level] }}
+                    style={{ color: risk ? RISK_COLOR[risk.risk_level] : "var(--ink-dim)" }}
                   >
-                    {risk!.risk_level} risk
+                    {risk ? `${risk.risk_level} risk` : "Unscored"}
                   </p>
+                  {!risk && (
+                    <p className="mono mt-2 text-[12px] text-[var(--ink-dim)]">
+                      Scorer unreachable — packet analysis below is unaffected.
+                    </p>
+                  )}
                 </div>
 
                 <div className="flex gap-10">
-                  <Metric label="Score" value={risk!.risk_score.toFixed(3)} />
-                  <Metric label="Confidence" value={risk!.confidence.toFixed(3)} />
+                  <Metric label="Score" value={risk ? risk.risk_score.toFixed(3) : "—"} />
+                  <Metric label="Confidence" value={risk ? risk.confidence.toFixed(3) : "—"} />
                   <Metric label="Drop rate" value={`${snapshot.filtering.drop_rate.toFixed(2)}%`} />
                 </div>
               </div>
 
-              {/* score meter */}
+              {/* score meter -- an empty track when there is no score to draw */}
               <div className="mt-8 h-4 w-full border-2 border-[var(--rule-hard)] bg-[var(--bg-sunken)]">
-                <div
-                  className="h-full transition-[width] duration-700"
-                  style={{
-                    width: `${Math.round(risk!.risk_score * 100)}%`,
-                    background: RISK_COLOR[risk!.risk_level],
-                  }}
-                />
+                {risk && (
+                  <div
+                    className="h-full transition-[width] duration-700"
+                    style={{
+                      width: `${Math.round(risk.risk_score * 100)}%`,
+                      background: RISK_COLOR[risk.risk_level],
+                    }}
+                  />
+                )}
               </div>
             </section>
 
@@ -266,12 +273,16 @@ export default function Home() {
 
                 <Panel title="Detected anomalies">
                   <div className="space-y-3">
-                    {risk!.anomalies.length === 0 ? (
+                    {!risk ? (
+                      <p className="mono text-xs text-[var(--ink-dim)]">
+                        No verdict — the scorer did not respond.
+                      </p>
+                    ) : risk.anomalies.length === 0 ? (
                       <p className="mono text-xs text-[var(--ink-dim)]">
                         Nothing flagged in this capture.
                       </p>
                     ) : (
-                      risk!.anomalies.map((a, i) => (
+                      risk.anomalies.map((a, i) => (
                         <div
                           key={`${a}-${i}`}
                           className="flex items-start gap-3 border-l-4 border-[var(--danger)] bg-[var(--bg-sunken)] px-3 py-2"

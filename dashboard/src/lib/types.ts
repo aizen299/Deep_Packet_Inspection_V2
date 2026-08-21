@@ -30,7 +30,13 @@ export type RiskLevel = "Low" | "Medium" | "High"
 export interface Snapshot {
   packets: PacketStats
   apps: AppEntry[]
-  ml: MlVerdict
+  /**
+   * null when the scorer could not be reached. Distinct from a genuine Low
+   * verdict -- the API returns ml: null on any ML failure, and rendering that
+   * as a score of zero reads as "analysed, nothing wrong" when nothing was
+   * analysed at all.
+   */
+  ml: MlVerdict | null
   filtering: { forwarded: number; dropped: number; drop_rate: number }
   activeConnections: number
   inputFile: string | null
@@ -66,10 +72,10 @@ function normaliseApps(raw: unknown): AppEntry[] {
     .sort((a, b) => b.count - a.count)
 }
 
-function normaliseMl(raw: unknown): MlVerdict {
-  if (!isRecord(raw)) {
-    return { risk_score: 0, risk_level: "Low", confidence: 0, anomalies: [] }
-  }
+function normaliseMl(raw: unknown): MlVerdict | null {
+  // A missing verdict stays missing. Substituting a zeroed Low here is what
+  // made an unreachable scorer look like a clean bill of health.
+  if (!isRecord(raw)) return null
 
   const level = toStr(raw.risk_level, "Low") as RiskLevel
 

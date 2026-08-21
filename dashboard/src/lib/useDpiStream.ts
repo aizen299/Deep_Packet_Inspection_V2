@@ -53,7 +53,7 @@ export function useDpiStream() {
         {
           timestamp: next.timestamp,
           totalPackets: next.packets.total_packets,
-          riskLevel: next.ml.risk_level,
+          riskLevel: next.ml?.risk_level ?? "Unscored",
           inputFile: next.inputFile,
         },
         ...prev,
