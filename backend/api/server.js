@@ -36,10 +36,35 @@ const API_KEY = process.env.API_KEY || ""
 // secret configures the whole stack, but can be set separately.
 const ML_API_KEY = process.env.ML_API_KEY || process.env.API_KEY || ""
 
+// Platform service discovery (Render's `fromService: hostport`) yields a bare
+// "host:port", which axios rejects as a relative URL. Remote hosts get https,
+// since the request carries ML_API_KEY and may cross the public internet;
+// only loopback falls back to http.
+const ML_SERVICE_URL = (() => {
+  const raw = process.env.ML_SERVICE_URL || "http://localhost:5050"
+  if (/^https?:\/\//.test(raw)) return raw
+
+  const host = raw.split(":")[0]
+  const isLocal = host === "localhost" || host === "127.0.0.1" || !host.includes(".")
+  return `${isLocal ? "http" : "https"}://${raw}`
+})()
+
+// Generous by default: a scorer on an idle-suspending host can take tens of
+// seconds to wake, and a timeout here degrades silently to a null ML verdict.
+const ML_TIMEOUT_MS = Number(process.env.ML_TIMEOUT_MS || 10000)
+
 const ENGINE_TIMEOUT_MS = Number(process.env.ENGINE_TIMEOUT_MS || 120000)
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 100 * 1024 * 1024)
 
 if (!API_KEY) {
+  if (process.env.ALLOW_UNAUTHENTICATED !== "true") {
+    console.error(
+      "[FATAL] API_KEY is unset, which leaves every endpoint unauthenticated - " +
+        "including /upload, which runs the engine on the posted file. Set " +
+        "API_KEY, or set ALLOW_UNAUTHENTICATED=true to run without auth on purpose."
+    )
+    process.exit(1)
+  }
   console.warn(
     "[WARN] API_KEY is not set - all endpoints are unauthenticated. " +
       "Set API_KEY to require an x-api-key header."
@@ -348,14 +373,11 @@ function runEngine(inputPath, outputPath, inputLabel, res, onComplete = () => {}
 
         let mlResult = null
         try {
-          const ML_SERVICE_URL =
-            process.env.ML_SERVICE_URL || "http://localhost:5050"
-
           const mlResponse = await axios.post(
             `${ML_SERVICE_URL}/predict`,
             buildFeatureVector(raw),
             {
-              timeout: 10000,
+              timeout: ML_TIMEOUT_MS,
               headers: ML_API_KEY ? { "x-api-key": ML_API_KEY } : {},
             }
           )

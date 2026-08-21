@@ -46,12 +46,30 @@ cp .env.example .env
 | `BIND_HOST`           | api          | Defaults to `127.0.0.1`; compose sets `0.0.0.0`.      |
 | `ALLOWED_ORIGINS`     | api, ml      | CORS allowlist, comma separated.                      |
 | `ENGINE_TIMEOUT_MS`   | api          | Engine subprocess timeout (default 120000).           |
+| `ML_TIMEOUT_MS`       | api          | ML request timeout (default 10000). Raise for cold starts.|
 | `MAX_UPLOAD_BYTES`    | api          | Upload size cap (default 100 MB).                     |
 | `NEXT_PUBLIC_API_URL` | dashboard    | Inlined at **build** time; changing it needs a rebuild.|
+| `BASIC_AUTH_USER`     | dashboard    | Basic Auth wall. Blank = disabled.                    |
+| `BASIC_AUTH_PASSWORD` | dashboard    | Basic Auth wall. Blank = disabled.                    |
+| `ALLOW_UNAUTHENTICATED` | all        | Explicit opt-in to running with auth disabled.        |
+
+**Missing credentials stop the service rather than disabling auth.** `api` and
+`ml` exit at startup when `API_KEY` is unset; the dashboard serves 503 when a
+production build has no `BASIC_AUTH_*`. Set `ALLOW_UNAUTHENTICATED=true` to run
+open on purpose — `docker-compose.yml` does exactly that, since it binds to
+localhost. The point is that an unauthenticated deployment is something you
+state, not something you get by forgetting a variable.
 
 Note that the dashboard is a browser app with no user login, so its key is not
 secret from whoever runs the browser. It gates access from other hosts and
-origins — do not expose these services to the internet.
+origins.
+
+For anything reachable from the internet, set `BASIC_AUTH_USER` and
+`BASIC_AUTH_PASSWORD`. The middleware in `dashboard/src/middleware.ts` gates
+every path, `/_next/static` included — the client bundle carries the API key, so
+the assets have to sit behind the same wall or the key is public. This is a
+shared password, not per-user login; treat it as a lock on the front door rather
+than real user authentication.
 
 ---
 
@@ -110,6 +128,37 @@ Dashboard → http://localhost:3000
 API → http://localhost:4000  
 
 The ML service is not published to the host; only the backend reaches it.
+
+---
+
+## Deploying to Render
+
+`render.yaml` is a Blueprint covering all three services as public web services
+on the free tier.
+
+1. Push this repo to GitHub.
+2. In Render: **New → Blueprint**, select the repo, apply `render.yaml`.
+3. Render prompts for the `sync: false` values. Use the same `API_KEY` for all
+   three services, and that same value again for `NEXT_PUBLIC_API_KEY`.
+4. The first deploy assigns URLs. Fill in the three cross-references, then
+   **rebuild the dashboard**:
+   - backend `ML_SERVICE_URL` → `https://dpi-ml.onrender.com`
+   - backend `ALLOWED_ORIGINS` → `https://dpi-dashboard.onrender.com`
+   - dashboard `NEXT_PUBLIC_API_URL` → `https://dpi-backend.onrender.com`
+
+`NEXT_PUBLIC_*` values are inlined at build time, so changing either one
+requires a **rebuild** of the dashboard, not just a restart.
+
+Two things this topology gives up versus `docker-compose.yml`:
+
+- **The ML scorer is internet-facing.** In compose it is unreachable except from
+  the backend; here its `API_KEY` check is the only thing gating it. Switching
+  it to `type: pserv` restores the private topology, but private services are
+  not on the free tier.
+- **Free instances suspend when idle** and cold-start on the next request. The
+  Blueprint sets `ML_TIMEOUT_MS=60000` for this reason — at the 10s default a
+  cold scorer times out, and the failure is silent: `ml` comes back `null` and
+  the dashboard renders zeros.
 
 ---
 

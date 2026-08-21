@@ -14,4 +14,5 @@ USER mlsvc
 
 EXPOSE 5050
 
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "5050"]
+# Shell form so a platform-assigned $PORT is honoured; compose leaves it unset.
+CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-5050}"]

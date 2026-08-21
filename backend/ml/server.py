@@ -22,8 +22,17 @@ app.add_middleware(
     allow_headers=["Content-Type", "x-api-key"],
 )
 
-# Optional shared secret; when set, the control plane must present it.
+# Shared secret; when set, the control plane must present it.
 API_KEY = os.environ.get("API_KEY", "")
+
+# An unset key disables auth entirely, which is only survivable when nothing can
+# reach this port but the control plane. Deployed topologies that expose it
+# publicly have to opt into that state by name rather than fall into it.
+if not API_KEY and os.environ.get("ALLOW_UNAUTHENTICATED") != "true":
+    raise RuntimeError(
+        "API_KEY is unset, which leaves /predict unauthenticated. Set API_KEY, "
+        "or set ALLOW_UNAUTHENTICATED=true to run without auth on purpose."
+    )
 
 # Resolve relative to this file so the model does not land in whatever the
 # process working directory happens to be.

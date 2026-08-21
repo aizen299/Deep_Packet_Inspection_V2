@@ -47,6 +47,15 @@ services:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4000}
         - NEXT_PUBLIC_API_KEY=${API_KEY:-dev-local-key}
     container_name: dpi_dashboard
+    environment:
+      # Read server-side by the Next.js middleware, so these are runtime values
+      # (unlike NEXT_PUBLIC_*, which must be build args). Unset = no auth wall.
+      - BASIC_AUTH_USER=${BASIC_AUTH_USER:-}
+      - BASIC_AUTH_PASSWORD=${BASIC_AUTH_PASSWORD:-}
+      # This is a localhost-only stack, so running without the wall is a valid
+      # choice here -- but it has to be stated, not inherited. Deployments that
+      # omit it refuse to serve rather than come up open.
+      - ALLOW_UNAUTHENTICATED=true
     ports:
       - "3000:3000"
     depends_on:

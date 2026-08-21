@@ -1,0 +1,82 @@
+# Render Blueprint — mirrors docker-compose.yml for production.
+#
+# All three services are public web services so the whole stack fits Render's
+# free tier. Note this differs from docker-compose.yml, where the ML scorer is
+# reachable only from the backend: here it has its own public URL and its
+# API_KEY check is the only thing gating it. Moving it to `type: pserv` (a
+# private service, paid plans only) restores the compose topology.
+#
+# Free instances suspend when idle and cold-start on the next request, which is
+# why ML_TIMEOUT_MS is raised well above the 10s default — a timeout degrades
+# silently to a null ML verdict and the dashboard renders zeros.
+#
+# Secrets are NOT stored here. Anything marked `sync: false` is prompted for on
+# Blueprint creation and kept out of the repo.
+
+services:
+  # ---- ML anomaly scorer -----------------------------------------------------
+  - name: dpi-ml
+    type: web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/ml/Dockerfile
+    dockerContext: ./backend/ml
+    healthCheckPath: /health
+    envVars:
+      # The only access control on this service now that it is public.
+      - key: API_KEY
+        sync: false
+
+  # ---- Control plane + Socket.IO server --------------------------------------
+  - name: dpi-backend
+    type: web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    envVars:
+      - key: BIND_HOST
+        value: 0.0.0.0
+      # Must match the dashboard's public URL exactly, or CORS and the Socket.IO
+      # handshake both fail. Set once Render assigns the URL:
+      #   https://dpi-dashboard.onrender.com
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # Full URL including scheme: https://dpi-ml.onrender.com
+      - key: ML_SERVICE_URL
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: ML_TIMEOUT_MS
+        value: "60000"
+      - key: ENGINE_TIMEOUT_MS
+        value: "120000"
+      - key: MAX_UPLOAD_BYTES
+        value: "104857600"
+      - key: RATE_LIMIT_MAX
+        value: "20"
+
+  # ---- Next.js dashboard -----------------------------------------------------
+  - name: dpi-dashboard
+    type: web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./dashboard/Dockerfile
+    dockerContext: ./dashboard
+    envVars:
+      # Render exposes env vars as Docker build args, which is what these two
+      # need: Next.js inlines NEXT_PUBLIC_* into the client bundle at build time,
+      # so changing either one requires a rebuild, not just a restart.
+      #
+      # Full URL including scheme: https://dpi-backend.onrender.com
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+      - key: NEXT_PUBLIC_API_KEY
+        sync: false
+      # Gates the whole app, including /_next/static — the client bundle carries
+      # NEXT_PUBLIC_API_KEY, so the assets must sit behind the same wall.
+      - key: BASIC_AUTH_USER
+        sync: false
+      - key: BASIC_AUTH_PASSWORD
+        sync: false
