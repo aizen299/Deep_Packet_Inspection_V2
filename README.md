@@ -41,7 +41,7 @@ cp .env.example .env
 
 | Variable              | Used by      | Purpose                                              |
 |-----------------------|--------------|------------------------------------------------------|
-| `API_KEY`             | api, ml      | Required in the `x-api-key` header. Unset = no auth.  |
+| `API_KEY`             | api, ml      | Required in the `x-api-key` header. Unset = refuses to start. |
 | `ML_SERVICE_URL`      | api          | Where to reach the scoring service.                   |
 | `BIND_HOST`           | api          | Defaults to `127.0.0.1`; compose sets `0.0.0.0`.      |
 | `ALLOWED_ORIGINS`     | api, ml      | CORS allowlist, comma separated.                      |
