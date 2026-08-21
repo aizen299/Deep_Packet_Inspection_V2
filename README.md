@@ -31,6 +31,30 @@ All services run via Docker Compose.
 
 ---
 
+## Configuration
+
+All services share a single secret. Copy the example env file and set it:
+
+```
+cp .env.example .env
+```
+
+| Variable              | Used by      | Purpose                                              |
+|-----------------------|--------------|------------------------------------------------------|
+| `API_KEY`             | api, ml      | Required in the `x-api-key` header. Unset = no auth.  |
+| `ML_SERVICE_URL`      | api          | Where to reach the scoring service.                   |
+| `BIND_HOST`           | api          | Defaults to `127.0.0.1`; compose sets `0.0.0.0`.      |
+| `ALLOWED_ORIGINS`     | api, ml      | CORS allowlist, comma separated.                      |
+| `ENGINE_TIMEOUT_MS`   | api          | Engine subprocess timeout (default 120000).           |
+| `MAX_UPLOAD_BYTES`    | api          | Upload size cap (default 100 MB).                     |
+| `NEXT_PUBLIC_API_URL` | dashboard    | Inlined at **build** time; changing it needs a rebuild.|
+
+Note that the dashboard is a browser app with no user login, so its key is not
+secret from whoever runs the browser. It gates access from other hosts and
+origins — do not expose these services to the internet.
+
+---
+
 ## Run Locally
 
 ### Build Engine
@@ -44,21 +68,31 @@ cd backend
 
 ```
 cd backend/api
-node server.js
+npm ci
+API_KEY=dev-key node server.js
 ```
 
 ### Start ML Service
 
 ```
 cd backend/ml
-uvicorn server:app --port 5050
+pip install -r requirements.txt
+API_KEY=dev-key uvicorn server:app --port 5050
 ```
 
 ### Start Dashboard
 
 ```
 cd dashboard
+npm ci
+cp .env.example .env.local
 npm run dev
+```
+
+### Run the engine directly
+
+```
+./backend/build/bin/dpi_engine capture.pcap filtered.pcap --json
 ```
 
 ---
@@ -68,11 +102,14 @@ npm run dev
 From project root:
 
 ```
+cp .env.example .env
 docker-compose up --build
 ```
 
 Dashboard → http://localhost:3000  
 API → http://localhost:4000  
+
+The ML service is not published to the host; only the backend reaches it.
 
 ---
 
