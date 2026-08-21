@@ -51,6 +51,73 @@ jobs:
           print("engine JSON contract OK:", r["packet_stats"])
           PY
 
+  fuzz:
+    name: Extractor fuzzing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build and generator dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libpcap-dev
+          pip install -r requirements-dev.txt
+
+      - name: Build with AddressSanitizer and UBSan
+        run: cd backend && chmod +x build.sh && ./build.sh asan
+
+      - name: Confirm the sanitizer is actually armed
+        # A clean fuzz run proves nothing if the instrumentation is missing, so
+        # fail loudly here rather than reporting a false all-clear below.
+        run: |
+          cat > /tmp/canary.cpp <<'CPP'
+          #include <cstdint>
+          #include <cstdio>
+          int main() {
+              uint8_t buf[8] = {0};
+              volatile uint8_t x = buf[9];
+              printf("%d\n", x);
+              return 0;
+          }
+          CPP
+          c++ -fsanitize=address,undefined -fno-omit-frame-pointer -g -o /tmp/canary /tmp/canary.cpp
+          if /tmp/canary > /dev/null 2>/tmp/canary.err; then
+            echo "::error::canary did not trap - sanitizer is not armed"
+            exit 1
+          fi
+          grep -q "AddressSanitizer" /tmp/canary.err || {
+            echo "::error::canary failed for an unexpected reason"
+            cat /tmp/canary.err
+            exit 1; }
+          echo "sanitizer confirmed armed"
+
+      - name: Fuzz the protocol extractors
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          status=0
+          for seed in 1 7 42 1337 90210; do
+            python3 generate_fuzz_pcap.py --out /tmp/fz.pcap --count 12000 --seed "$seed" >/dev/null
+            if ! ./backend/build-asan/bin/dpi_engine /tmp/fz.pcap /tmp/out.pcap --json \
+                 >/dev/null 2>/tmp/fz.err; then
+              echo "::error::engine failed on seed $seed"
+              tail -40 /tmp/fz.err
+              status=1
+              continue
+            fi
+            if grep -qiE "AddressSanitizer|runtime error" /tmp/fz.err; then
+              echo "::error::sanitizer finding on seed $seed"
+              grep -iE "AddressSanitizer|runtime error|SUMMARY" /tmp/fz.err | head -20
+              status=1
+              continue
+            fi
+            echo "seed $seed: clean"
+          done
+          exit $status
+
   api:
     name: Control plane
     runs-on: ubuntu-latest

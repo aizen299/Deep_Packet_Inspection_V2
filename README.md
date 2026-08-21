@@ -120,6 +120,23 @@ CI (`.github/workflows/ci.yml`) additionally builds the C++ engine, runs it
 against a generated capture to check the JSON contract the API depends on, and
 verifies both services refuse to start without `API_KEY`.
 
+### Fuzzing the protocol extractors
+
+The TLS/HTTP/DNS parsers walk attacker-controlled length fields, and a capture
+file is untrusted input. Build with sanitizers and feed it malformed packets:
+
+```
+pip install -r requirements-dev.txt
+cd backend && ./build.sh asan
+python3 generate_fuzz_pcap.py
+./backend/build-asan/bin/dpi_engine fuzz_corpus.pcap /tmp/out.pcap --json
+```
+
+The generator corrupts one length field at a time and leaves the rest valid, so
+a crash points at a specific field. Cases are seeded — `--seed` reproduces one.
+CI runs five seeds and checks the sanitizer traps a known overread first, since
+a clean run from an uninstrumented binary would be a false all-clear.
+
 ### Run the engine directly
 
 ```

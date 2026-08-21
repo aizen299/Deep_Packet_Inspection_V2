@@ -1,4 +1,13 @@
-from scapy.all import *
+try:
+    from scapy.all import *
+except ImportError:
+    raise SystemExit(
+        "scapy is required by this generator but is not part of the stack's "
+        "runtime dependencies.\n\n    pip install -r requirements-dev.txt\n\n"
+        "generate_test_pcap.py needs no third-party packages if you just want "
+        "a capture to test with."
+    )
+
 import random
 
 packets = []

@@ -1,0 +1,8 @@
+# Tooling for generating test captures. Not needed to run the stack --
+# backend/ml/requirements.txt covers the ML service's own runtime deps.
+#
+#   pip install -r requirements-dev.txt
+#
+# generate_test_pcap.py is stdlib-only and needs nothing from this file;
+# only generate_attack_pcap.py and the fuzz corpus generator use scapy.
+scapy>=2.5.0
