@@ -1,9 +1,23 @@
-build
+# Build artifacts (the image rebuilds the engine itself)
 build/
-output
+output/
+CMakeCache.txt
+CMakeFiles/
+
+# Dependencies -- reinstalled in the image
 node_modules
 api/node_modules
+ml/venv
+venv
+
+# Captures and generated reports.
+# NOTE: do NOT use a blanket *.json here -- it would exclude api/package.json
+# and api/package-lock.json from the build context and break `npm ci`.
 *.pcap
-*.json
-CMakeCache.txt
-CMakeFiles
+api/uploads/
+stats.json
+*.log
+
+# Python bytecode
+__pycache__/
+*.py[cod]

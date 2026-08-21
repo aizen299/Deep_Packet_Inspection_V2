@@ -3,46 +3,66 @@
 # ==============================
 
 backend/build/
-backend/build/*
 backend/output/
 backend/bin/
 backend/CMakeFiles/
 backend/CMakeCache.txt
 backend/Makefile
-backend/*.pcap
-backend/*.json
-backend/stats.json
 
 # ==============================
-# Uploaded PCAP Files
+# Uploaded / Generated PCAPs
 # ==============================
 
 backend/api/uploads/
-
-# ==============================
-# Global Generated Files
-# ==============================
-
 *.pcap
-*.json
-*.log
+test_dpi.pcap
+extreme_traffic.pcap
 
-# ==============================
-# Keep Only Official Sample
-# ==============================
-
+# Captures dropped into the data dir (extensionless multer temp names land here
+# too). Everything is ignored except the checked-in sample.
 backend/data/*
 !backend/data/sample.pcap
+
+# Stale generated report served from the dashboard's static dir.
+dashboard/public/stats.json
+
+# ==============================
+# Generated JSON (engine reports, stats)
+# ==============================
+#
+# NOTE: this used to be a blanket `*.json`, which silently excluded every
+# package.json / package-lock.json / tsconfig.json in the repo and left both
+# Docker images unbuildable from a clean clone. Ignore the generated files by
+# name instead, and keep the negations below as a backstop.
+
+backend/*.json
+backend/stats.json
+*.log
+
+!package.json
+!package-lock.json
+!tsconfig.json
+!next.config.json
+!eslint.config.json
+!docker-compose.json
+
+# ==============================
+# Python
+# ==============================
+
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.joblib
 
 # ==============================
 # Node / Next.js
 # ==============================
 
-backend/api/node_modules/
-frontend/node_modules/
-frontend/.next/
-frontend/out/
 node_modules/
+.next/
+out/
 
 # ==============================
 # Environment Files
@@ -56,3 +76,4 @@ node_modules/
 # ==============================
 
 .DS_Store
+CLAUDE.md

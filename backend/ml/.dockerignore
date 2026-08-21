@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+*.py[cod]
+
+# Generated at first run; baking a stale one into the image hides drift.
+model.joblib

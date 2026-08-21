@@ -1,4 +1,5 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import numpy as np
 from sklearn.ensemble import IsolationForest
@@ -7,7 +8,31 @@ import os
 
 app = FastAPI()
 
-MODEL_PATH = "model.joblib"
+# This service is only meant to be reachable from the control plane, so the
+# default origin allowlist is empty -- browsers get no cross-origin access.
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["POST", "GET"],
+    allow_headers=["Content-Type", "x-api-key"],
+)
+
+# Optional shared secret; when set, the control plane must present it.
+API_KEY = os.environ.get("API_KEY", "")
+
+# Resolve relative to this file so the model does not land in whatever the
+# process working directory happens to be.
+MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model.joblib")
+
+
+def require_api_key(provided: str | None) -> None:
+    if API_KEY and provided != API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 class FeatureInput(BaseModel):
     total_packets: float
@@ -25,8 +50,11 @@ def load_or_train_model():
     if os.path.exists(MODEL_PATH):
         return joblib.load(MODEL_PATH)
 
-    # Train dummy baseline model
-    normal_data = np.random.normal(loc=0.5, scale=0.1, size=(500, 10))
+    # Train dummy baseline model. The seed matters: model.joblib is a generated
+    # artifact and is no longer committed, so without it every rebuild would
+    # produce a subtly different scorer.
+    rng = np.random.default_rng(42)
+    normal_data = rng.normal(loc=0.5, scale=0.1, size=(500, 10))
     model = IsolationForest(contamination=0.05, random_state=42)
     model.fit(normal_data)
     joblib.dump(model, MODEL_PATH)
@@ -35,7 +63,9 @@ def load_or_train_model():
 model = load_or_train_model()
 
 @app.post("/predict")
-def predict(features: FeatureInput):
+def predict(features: FeatureInput, x_api_key: str | None = Header(default=None)):
+    require_api_key(x_api_key)
+
     raw = np.array([[ 
         features.total_packets,
         features.total_bytes,
