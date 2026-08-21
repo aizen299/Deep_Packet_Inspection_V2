@@ -2,9 +2,10 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import numpy as np
-from sklearn.ensemble import IsolationForest
 import joblib
 import os
+
+from features import FEATURE_NAMES, preprocess
 
 app = FastAPI()
 
@@ -56,58 +57,62 @@ class FeatureInput(BaseModel):
     packets_per_connection: float
 
 def load_or_train_model():
+    """Load the fitted artifact, building it on first run if absent.
+
+    model.joblib is generated, not committed, so a clean image has to be able to
+    produce one. train_model.py owns the definition of "normal" -- keeping it in
+    one place is what stopped the served model and the training corpus from
+    drifting apart.
+    """
     if os.path.exists(MODEL_PATH):
-        return joblib.load(MODEL_PATH)
+        artifact = joblib.load(MODEL_PATH)
+        if isinstance(artifact, dict) and "pipeline" in artifact:
+            return artifact
+        # A pre-calibration artifact from an older image. Rebuild rather than
+        # serve it: the bare estimator has no training-score distribution, and
+        # scoring against it is what produced a constant High verdict.
+        print("[WARN] stale model.joblib without calibration data; retraining")
 
-    # Train dummy baseline model. The seed matters: model.joblib is a generated
-    # artifact and is no longer committed, so without it every rebuild would
-    # produce a subtly different scorer.
-    rng = np.random.default_rng(42)
-    normal_data = rng.normal(loc=0.5, scale=0.1, size=(500, 10))
-    model = IsolationForest(contamination=0.05, random_state=42)
-    model.fit(normal_data)
-    joblib.dump(model, MODEL_PATH)
-    return model
+    import train_model
 
-model = load_or_train_model()
+    rng = np.random.default_rng(train_model.SEED)
+    artifact = train_model.build(train_model.synthesise_normal(train_model.N_SAMPLES, rng))
+    joblib.dump(artifact, MODEL_PATH)
+    return artifact
+
+
+_artifact = load_or_train_model()
+model = _artifact["pipeline"]
+TRAIN_SCORES = _artifact["train_scores"]
 
 @app.post("/predict")
 def predict(features: FeatureInput, x_api_key: str | None = Header(default=None)):
     require_api_key(x_api_key)
 
-    raw = np.array([[ 
-        features.total_packets,
-        features.total_bytes,
-        features.tcp_ratio,
-        features.udp_ratio,
-        features.unknown_ratio,
-        features.dns_ratio,
-        features.unique_app_count,
-        features.active_connections,
-        features.drop_rate,
-        features.packets_per_connection
-    ]])
+    raw = np.array([[getattr(features, name) for name in FEATURE_NAMES]], dtype=float)
 
-    # Basic normalization to align with training distribution (~0-1 range)
-    scaled = raw.copy()
-    scaled[:, 0] /= 10000.0      # total_packets
-    scaled[:, 1] /= 1000000.0    # total_bytes
-    scaled[:, 6] /= 50.0         # unique_app_count
-    scaled[:, 7] /= 5000.0       # active_connections
-    scaled[:, 9] /= 100.0        # packets_per_connection
+    # Same transform the pipeline was fitted through; the StandardScaler inside
+    # it handles per-column centring, so there are no hand-tuned divisors here.
+    X = preprocess(raw)
 
-    X = scaled
+    score = float(model.decision_function(X)[0])
 
-    score = model.decision_function(X)[0]
-    anomaly = model.predict(X)[0]  # -1 = anomaly
-
-    risk_score = float(1 - score)
-    risk_score = max(0.0, min(1.0, risk_score))
+    # decision_function is an unbounded margin (positive = inlier) whose useful
+    # range depends on the training data, so it cannot be mapped to 0-1 by
+    # arithmetic alone. Expressing it as a percentile of the training scores
+    # gives a bounded, interpretable number: the fraction of known-benign
+    # traffic that looks *less* anomalous than this sample.
+    #
+    # The previous `1 - score` treated the margin as a probability. Real inlier
+    # margins top out around 0.13, so risk_score never fell below 0.87 and every
+    # verdict came back High -- Low and Medium were unreachable.
+    risk_score = float(np.searchsorted(TRAIN_SCORES, score) / len(TRAIN_SCORES))
+    risk_score = max(0.0, min(1.0, 1.0 - risk_score))
 
     risk_level = "Low"
-    if risk_score > 0.7:
+    if risk_score > 0.9:
         risk_level = "High"
-    elif risk_score > 0.4:
+    elif risk_score > 0.7:
         risk_level = "Medium"
 
     explanations = []
@@ -121,7 +126,16 @@ def predict(features: FeatureInput, x_api_key: str | None = Header(default=None)
     if features.active_connections > 100:
         explanations.append("High connection count spike")
 
-    confidence = float(abs(score))
+    if features.drop_rate > 20:
+        explanations.append("Elevated filter drop rate")
+
+    if features.packets_per_connection < 2 and features.active_connections > 50:
+        explanations.append("Many near-empty connections (scan-like)")
+
+    # How far outside the training spread this sample sits, in units of that
+    # spread -- 0 for a typical benign capture, approaching 1 for a clear outlier.
+    spread = float(TRAIN_SCORES[-1] - TRAIN_SCORES[0]) or 1.0
+    confidence = float(min(1.0, abs(score - float(np.median(TRAIN_SCORES))) / spread))
 
     return {
         "risk_score": risk_score,
