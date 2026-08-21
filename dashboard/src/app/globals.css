@@ -1,26 +1,150 @@
 @import "tailwindcss";
 
+/* ============================================================
+   MAXIMALIST DESIGN TOKENS
+   Dark is the primary look; light is a saturated "paper" inverse.
+   Theme is driven by data-theme on <html> (set by the toggle).
+   ============================================================ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --acid:    #ccff00;
+  --magenta: #ff2e88;
+  --cyan:    #00e5ff;
+  --violet:  #8b5cf6;
+  --amber:   #ffb300;
+  --danger:  #ff3b30;
+
+  --bg:        #07070c;
+  --bg-raised: #0e0e18;
+  --bg-sunken: #030307;
+  --ink:       #f7f7f2;
+  --ink-dim:   #a3a3b2;
+  --rule:      rgba(247, 247, 242, 0.16);
+  --rule-hard: rgba(247, 247, 242, 0.4);
+  --shadow:    rgba(0, 0, 0, 0.75);
+  --grid-line: rgba(247, 247, 242, 0.05);
+}
+
+:root[data-theme="light"] {
+  --acid:    #7a9c00;
+  --magenta: #d6006b;
+  --cyan:    #0077a3;
+  --violet:  #6d28d9;
+  --amber:   #b87700;
+  --danger:  #cc2418;
+
+  --bg:        #f4f1e8;
+  --bg-raised: #ffffff;
+  --bg-sunken: #e6e1d3;
+  --ink:       #0d0d12;
+  --ink-dim:   #56564a;
+  --rule:      rgba(13, 13, 18, 0.18);
+  --rule-hard: rgba(13, 13, 18, 0.55);
+  --shadow:    rgba(13, 13, 18, 0.28);
+  --grid-line: rgba(13, 13, 18, 0.05);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--bg);
+  --color-bg-raised: var(--bg-raised);
+  --color-ink: var(--ink);
+  --color-ink-dim: var(--ink-dim);
+  --color-acid: var(--acid);
+  --color-magenta: var(--magenta);
+  --color-cyan: var(--cyan);
+  --color-violet: var(--violet);
+  --color-amber: var(--amber);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+* { box-sizing: border-box; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  overflow-x: hidden;
+}
+
+/* ---- Structural ornament ---------------------------------- */
+
+.grid-paper {
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+/* Hard offset border, the load-bearing motif of the layout. */
+.slab {
+  border: 2px solid var(--rule-hard);
+  background: var(--bg-raised);
+  box-shadow: 6px 6px 0 var(--shadow);
+}
+
+.slab-tight {
+  border: 2px solid var(--rule);
+  background: var(--bg-raised);
+}
+
+.display {
+  font-family: var(--font-display), Impact, sans-serif;
+  text-transform: uppercase;
+  line-height: 0.84;
+  letter-spacing: -0.02em;
+}
+
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.stripe {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--rule-hard) 0 2px,
+    transparent 2px 9px
+  );
+}
+
+.outline-text {
+  -webkit-text-stroke: 2px var(--ink);
+  color: transparent;
+}
+
+/* ---- Motion ----------------------------------------------- */
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.marquee-track {
+  animation: marquee 38s linear infinite;
+  will-change: transform;
+}
+
+@keyframes blink {
+  0%, 45%  { opacity: 1; }
+  50%, 95% { opacity: 0.25; }
+}
+.blink { animation: blink 1.6s steps(1) infinite; }
+
+@keyframes sweep {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(400%); }
+}
+.sweep { animation: sweep 7s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track, .blink, .sweep { animation: none; }
+}
+
+/* Scrollbars, themed rather than default-grey. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg-sunken); }
+::-webkit-scrollbar-thumb {
+  background: var(--rule-hard);
+  border: 2px solid var(--bg-sunken);
 }

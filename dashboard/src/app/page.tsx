@@ -1,550 +1,433 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  ArcElement,
-  Tooltip,
-  Legend,
-} from "chart.js"
-import { Bar, Doughnut, Pie } from "react-chartjs-2"
-import ChartDataLabels from "chartjs-plugin-datalabels"
-import { motion } from "framer-motion"
-import * as THREE from "three"
-import { io } from "socket.io-client"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useDpiStream } from "@/lib/useDpiStream"
+import { usePointer } from "@/lib/usePointer"
+import { formatBytes, type RiskLevel } from "@/lib/types"
+import type { Theme } from "@/lib/theme"
+import { PanelErrorBoundary } from "@/components/ErrorBoundary"
+import { Ticker } from "@/components/Ticker"
+import { StatSlab } from "@/components/StatSlab"
+import { ApplicationChart, ProtocolChart } from "@/components/Charts"
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend, ChartDataLabels, {
-  id: "centerText",
-  beforeDraw(chart: any) {
-    const { ctx, chartArea } = chart
-    if (!chartArea) return
-    const centerX = (chartArea.left + chartArea.right) / 2
-    const centerY = (chartArea.top + chartArea.bottom) / 2
-    ctx.save()
-    ctx.textAlign = "center"
-    ctx.textBaseline = "middle"
-    ctx.font = "bold 22px sans-serif"
-    ctx.fillStyle = chart.options.plugins.centerText?.color || "#fff"
-    ctx.fillText(chart.options.plugins.centerText?.text || "", centerX, centerY)
-    ctx.restore()
-  }
-})
+const RISK_COLOR: Record<RiskLevel, string> = {
+  Low: "var(--acid)",
+  Medium: "var(--amber)",
+  High: "var(--danger)",
+}
 
 export default function Home() {
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"
-  const [stats, setStats] = useState<any>(null)
-  const [darkMode, setDarkMode] = useState(true)
-  const [mouse, setMouse] = useState({ x: 0, y: 0 })
-  const mouseRef = useRef({ x: 0, y: 0 })
-  const [smooth, setSmooth] = useState({ x: 0, y: 0 })
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const { snapshot, connection, analysing, error, history, runAnalysis, uploadCapture } =
+    useDpiStream()
+  const parallax = usePointer(18)
+  const [theme, setTheme] = useState<Theme>("dark")
+  const fileInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    const socket = io(API_URL)
+    document.documentElement.dataset.theme = theme
+  }, [theme])
 
-    socket.on("connect", async () => {
-      console.log("Connected to backend via WebSocket")
-
-      try {
-        await fetch(`${API_URL}/analyze`, {
-          method: "POST"
-        })
-      } catch (err) {
-        console.error("Auto-analyze failed:", err)
-      }
+  const exportJson = useCallback(() => {
+    if (!snapshot) return
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
+      type: "application/json",
     })
-
-    // Fetch latest cached stats on first load
-    fetch(`${API_URL}/stats`)
-      .then(res => res.json())
-      .then(json => {
-        if (json.success && json.data) {
-          setStats(json.data)
-        }
-      })
-      .catch(err => {
-        console.error("Failed to fetch initial stats:", err)
-      })
-
-    socket.on("stats_update", (data: any) => {
-      setStats(data)
-    })
-
-    socket.on("disconnect", () => {
-      console.log("WebSocket disconnected")
-    })
-
-    return () => {
-      socket.disconnect()
-    }
-  }, [])
-
-  useEffect(() => {
-    const handleMove = (e: MouseEvent) => {
-      const x = (e.clientX / window.innerWidth - 0.5) * 30
-      const y = (e.clientY / window.innerHeight - 0.5) * 30
-      setMouse({ x, y })
-      mouseRef.current = { x, y }
-    }
-    window.addEventListener("mousemove", handleMove)
-    return () => window.removeEventListener("mousemove", handleMove)
-  }, [])
-
-  useEffect(() => {
-    let animationFrame: number
-    const lerp = (start: number, end: number, factor: number) => start + (end - start) * factor
-
-    const animate = () => {
-      setSmooth(prev => ({
-        x: lerp(prev.x, mouse.x, 0.08),
-        y: lerp(prev.y, mouse.y, 0.08),
-      }))
-      animationFrame = requestAnimationFrame(animate)
-    }
-    animate()
-    return () => cancelAnimationFrame(animationFrame)
-  }, [mouse])
-
-  useEffect(() => {
-    const container = canvasRef.current as any
-    if (!container) return
-
-    const scene = new THREE.Scene()
-    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
-    const renderer = new THREE.WebGLRenderer({ alpha: true })
-    renderer.setSize(window.innerWidth, window.innerHeight)
-
-    const handleResize = () => {
-      renderer.setSize(window.innerWidth, window.innerHeight)
-      uniforms.u_resolution.value.set(window.innerWidth, window.innerHeight)
-    }
-
-    window.addEventListener("resize", handleResize)
-
-    container.appendChild(renderer.domElement)
-
-    const uniforms = {
-      u_time: { value: 0 },
-      u_mouse: { value: new THREE.Vector2(0, 0) },
-      u_resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
-    }
-
-    const material = new THREE.ShaderMaterial({
-      uniforms,
-      fragmentShader: `
-        uniform float u_time;
-        uniform vec2 u_mouse;
-        uniform vec2 u_resolution;
-
-        void main() {
-          vec2 uv = gl_FragCoord.xy / u_resolution;
-          float wave = sin(uv.y * 10.0 + u_time * 0.8) * 0.02;
-          float dist = distance(uv, u_mouse);
-
-          vec3 color = vec3(0.05, 0.1, 0.2);
-          color += 0.3 * vec3(
-            sin(u_time + uv.x * 5.0),
-            cos(u_time + uv.y * 5.0),
-            sin(u_time)
-          );
-          color += 0.4 * exp(-8.0 * dist);
-
-          gl_FragColor = vec4(color + wave, 1.0);
-        }
-      `,
-    })
-
-    const geometry = new THREE.PlaneGeometry(2, 2)
-    const mesh = new THREE.Mesh(geometry, material)
-    scene.add(mesh)
-
-    const animate = (time: number) => {
-      uniforms.u_time.value = time * 0.001
-      uniforms.u_mouse.value.set(
-        (mouseRef.current.x / 60) + 0.5,
-        (mouseRef.current.y / 60) + 0.5
-      )
-      renderer.render(scene, camera)
-      requestAnimationFrame(animate)
-    }
-    requestAnimationFrame(animate)
-
-    return () => {
-      window.removeEventListener("resize", handleResize)
-      renderer.dispose()
-      container.removeChild(renderer.domElement)
-    }
-  }, [])
-
-  if (!stats) return <div className="min-h-screen bg-black text-white flex items-center justify-center">Loading...</div>
-
-  const summary = stats.packet_stats || {
-    total_packets: 0,
-    total_bytes: 0,
-    tcp_packets: 0,
-    udp_packets: 0
-  }
-  const apps = stats.applications || stats.app_breakdown || {}
-  const riskLevel = stats.ml?.risk_level || "Low"
-  const riskScore = stats.ml?.risk_score ?? 0
-  const anomalies: string[] = stats.ml?.anomalies || []
-
-  const riskColor =
-    riskLevel === "High"
-      ? "bg-red-500"
-      : riskLevel === "Medium"
-      ? "bg-yellow-500"
-      : "bg-emerald-500"
-
-  const tcpRatio =
-    summary.total_packets > 0
-      ? summary.tcp_packets / summary.total_packets
-      : 0
-  const sortedApps = Object.entries(apps).sort(
-    (a, b) => ((b[1] as any)?.count ?? 0) - ((a[1] as any)?.count ?? 0)
-  )
-
-  const appLabels = sortedApps.map(([name, value]) => {
-    const percent = (value as any)?.percentage ?? 0
-    return `${name} (${percent}%)`
-  })
-
-  const appCounts = sortedApps.map(([, value]) =>
-    (value as any)?.count ?? 0
-  )
-
-  const textColor = darkMode ? "#ffffff" : "#111111"
-  const gridColor = darkMode
-    ? "rgba(255,255,255,0.15)"
-    : "rgba(0,0,0,0.15)"
-
-  const barData = {
-    labels: appLabels,
-    datasets: [{
-      data: appCounts,
-      backgroundColor: (ctx: any) => {
-        const chart = ctx.chart
-        const { ctx: c } = chart
-        const gradient = c.createLinearGradient(0, 0, chart.width, 0)
-        if (darkMode) {
-          gradient.addColorStop(0, "#00f5ff")
-          gradient.addColorStop(0.5, "#7b61ff")
-          gradient.addColorStop(1, "#ff3cac")
-        } else {
-          gradient.addColorStop(0, "#2563eb")
-          gradient.addColorStop(1, "#9333ea")
-        }
-        return gradient
-      },
-      borderRadius: 12,
-    }],
-  }
-
-  const barOptions = {
-    indexAxis: "y" as const,
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        callbacks: {
-          label: function(context: any) {
-            const rawValue = context.raw
-            const original = sortedApps[context.dataIndex]
-            const percent = (original?.[1] as any)?.percentage ?? 0
-            return ` ${rawValue} packets (${percent}%)`
-          }
-        }
-      }
-    },
-    scales: {
-      x: {
-        ticks: { 
-          color: textColor,
-          font: { size: 12 }
-        },
-        grid: { color: gridColor },
-      },
-      y: {
-        ticks: { 
-          color: textColor,
-          font: { size: 12 }
-        },
-        grid: { display: false },
-      },
-    },
-  }
-
-  const pieData = {
-    labels: ["TCP", "UDP"],
-    datasets: [{
-      data: [summary.tcp_packets, summary.udp_packets],
-      backgroundColor:
-        tcpRatio > 0.9
-          ? ["#ff3b3b", "#444444"]
-          : darkMode
-            ? ["#00f5ff", "#ff3cac"]
-            : ["#2563eb", "#9333ea"],
-      borderWidth: 0,
-      cutout: "70%",
-    }],
-  }
-
-  const pieOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        labels: {
-          color: textColor,
-          font: {
-            size: 14
-          }
-        }
-      },
-      datalabels: {
-        color: textColor,
-        font: {
-          weight: "bold" as const,
-          size: 14
-        },
-        formatter: (value: number, context: any) => {
-          const total = context.chart.data.datasets[0].data
-            .reduce((a: number, b: number) => a + b, 0)
-          if (!total) return "0%"
-          const percent = ((value / total) * 100).toFixed(1)
-          return percent + "%"
-        }
-      },
-      centerText: {
-        text: summary.total_packets.toString(),
-        color: textColor
-      }
-    }
-  }
-
-  const exportJSON = () => {
-    const blob = new Blob([JSON.stringify(stats, null, 2)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = "dpi_stats.json"
+    a.download = `dpi_snapshot_${Date.now()}.json`
     a.click()
-  }
+    URL.revokeObjectURL(url)
+  }, [snapshot])
 
-  const handleUpload = async (file: File) => {
-    const formData = new FormData()
-    formData.append("pcap", file)
+  const tickerItems = useMemo(() => {
+    if (!snapshot) return ["Awaiting first capture", "Engine idle", "DPI/OPS v1.0"]
+    return [
+      `${snapshot.packets.total_packets.toLocaleString()} packets`,
+      `${formatBytes(snapshot.packets.total_bytes)} inspected`,
+      `${snapshot.activeConnections.toLocaleString()} flows tracked`,
+      `Risk ${snapshot.ml.risk_level.toUpperCase()}`,
+      `Drop rate ${snapshot.filtering.drop_rate.toFixed(2)}%`,
+      `${snapshot.apps.length} applications classified`,
+      `Run ${snapshot.durationMs} ms`,
+      snapshot.inputFile ? `Source ${snapshot.inputFile}` : "Source sample.pcap",
+    ]
+  }, [snapshot])
 
-    try {
-      const res = await fetch(`${API_URL}/upload`, {
-        method: "POST",
-        body: formData,
-      })
-
-      const json = await res.json()
-
-      if (json.success) {
-        // Immediately update UI to avoid race conditions
-        setStats(json.data)
-      } else {
-        console.error("Upload API error:", json.message)
-      }
-    } catch (err) {
-      console.error("Upload failed:", err)
-    }
-  }
-
-  const glass = "relative backdrop-blur-3xl bg-white/15 dark:bg-white/10 border border-white/25 shadow-[0_25px_100px_rgba(0,0,0,0.65)] overflow-hidden transition-all duration-500"
+  const packets = snapshot?.packets
+  const risk = snapshot?.ml
 
   return (
-    <main className={`relative min-h-screen overflow-hidden transition-all duration-700 ${darkMode ? "bg-black" : "bg-white"}`}>
-      <div className="absolute inset-0 z-0 overflow-hidden">
-        <div className="absolute inset-0 bg-cover bg-center animate-zoomBlur" 
-             style={{
-               backgroundImage: "url('/bg.jpg')",
-               filter: "blur(15px) brightness(0.9)",
-               transform: "scale(1.2)"
-             }}
+    <main className="grid-paper relative min-h-screen">
+      {/* ---- decorative field ---- */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 z-0 overflow-hidden"
+      >
+        <div
+          className="absolute -top-40 -left-40 h-[38rem] w-[38rem] rounded-full opacity-25 blur-[120px]"
+          style={{
+            background: "var(--violet)",
+            transform: `translate3d(${parallax.x}px, ${parallax.y}px, 0)`,
+          }}
+        />
+        <div
+          className="absolute -right-40 top-1/3 h-[32rem] w-[32rem] rounded-full opacity-20 blur-[120px]"
+          style={{
+            background: "var(--magenta)",
+            transform: `translate3d(${-parallax.x}px, ${-parallax.y}px, 0)`,
+          }}
         />
       </div>
 
-      <div className="absolute inset-0 pointer-events-none opacity-20 mix-blend-overlay" style={{ backgroundImage: "url('https://www.transparenttextures.com/patterns/noise.png')" }} />
-
-      <div
-        className="relative z-10 p-12 transition-transform duration-300"
-        style={{ transform: `translate3d(${smooth.x}px, ${smooth.y}px, 0)` }}
-      >
-        <div className="flex justify-between items-center mb-12 relative z-20 isolate">
-          <h1
-            className="text-4xl font-semibold tracking-tight"
-            style={{
-              color: darkMode ? "#ffffff" : "#000000",
-              WebkitTextStroke: darkMode ? "0px transparent" : "0px transparent",
-              textShadow: darkMode
-                ? "0 6px 40px rgba(0,0,0,0.9)"
-                : "0 6px 40px rgba(255,255,255,0.9)",
-              position: "relative",
-              zIndex: 50
-            }}
-          >
-            DEEP PACKET INSPECTION DASHBOARD
-          </h1>
-          <div className="flex gap-4 items-center">
-            <button
-              onClick={() => setDarkMode(!darkMode)}
-              className="px-5 py-2 rounded-full backdrop-blur-xl bg-white/20 border border-white/30 shadow-[0_10px_30px_rgba(0,0,0,0.25)] hover:bg-white/30 hover:scale-105 transition-all duration-300"
-            >
-              {darkMode ? "Light" : "Dark"}
-            </button>
-            <button
-              onClick={exportJSON}
-              className="px-5 py-2 rounded-full backdrop-blur-xl bg-gradient-to-r from-cyan-400/30 to-blue-500/30 border border-white/30 text-white shadow-[0_10px_30px_rgba(0,0,0,0.35)] hover:scale-105 hover:shadow-[0_0_40px_rgba(0,255,255,0.6)] transition-all duration-300"
-            >
-              Export JSON
-            </button>
-            <label className="px-5 py-2 rounded-full backdrop-blur-xl bg-gradient-to-r from-emerald-400/30 to-teal-500/30 border border-white/30 text-white shadow-[0_10px_30px_rgba(0,0,0,0.35)] hover:scale-105 hover:shadow-[0_0_40px_rgba(0,255,200,0.6)] transition-all duration-300 cursor-pointer">
-              Upload PCAP
-              <input
-                type="file"
-                accept=".pcap"
-                hidden
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  if (file) handleUpload(file)
-                }}
-              />
-            </label>
+      <div className="relative z-10">
+        {/* ================= NAV ================= */}
+        <nav className="flex flex-wrap items-center justify-between gap-4 border-b-2 border-[var(--rule-hard)] bg-[var(--bg-sunken)] px-6 py-3">
+          <div className="flex items-center gap-3">
+            <span className="display bg-[var(--acid)] px-2 py-1 text-xl text-black">DPI</span>
+            <span className="mono text-xs tracking-[0.3em] uppercase">/ OPS CONSOLE</span>
           </div>
-        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-10 mb-14">
-          {[["Packets", summary.total_packets], ["Bytes", summary.total_bytes], ["TCP", summary.tcp_packets], ["UDP", summary.udp_packets]].map(([label, value]) => (
-            <motion.div
-              key={label as string}
-              className={`${glass} p-8 rounded-3xl`}
-              whileHover={{
-                scale: 1.05,
-                rotateX: -mouse.y * 0.2,
-                rotateY: mouse.x * 0.2,
-                boxShadow: "0 0 60px rgba(255,255,255,0.25)"
-              }}
-              transition={{ type: "spring", stiffness: 200, damping: 15 }}
-              style={{
-                transformStyle: "preserve-3d",
-                perspective: 1000,
-                background: `radial-gradient(circle at ${50 + mouse.x}% ${50 + mouse.y}%, rgba(255,255,255,0.35), rgba(255,255,255,0.08))`,
-                backdropFilter: "blur(30px)",
-              }}
+          <div className="flex items-center gap-3">
+            <StatusPill connection={connection} analysing={analysing} />
+            <button
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="mono cursor-pointer border-2 border-[var(--rule-hard)] px-3 py-1.5 text-[11px] uppercase transition-colors hover:bg-[var(--ink)] hover:text-[var(--bg)]"
             >
-              <div
-                className="absolute inset-0 pointer-events-none opacity-30"
-                style={{
-                  background: `radial-gradient(circle at ${50 - mouse.x}% ${50 - mouse.y}%, rgba(255,255,255,0.4), transparent 60%)`
-                }}
+              {theme === "dark" ? "Light" : "Dark"}
+            </button>
+          </div>
+        </nav>
+
+        <Ticker items={tickerItems} />
+
+        {/* ================= HERO ================= */}
+        <header className="border-b-2 border-[var(--rule-hard)] px-6 py-10">
+          <div className="mx-auto max-w-[1600px]">
+            <div className="flex flex-wrap items-end justify-between gap-8">
+              <div>
+                <p className="mono mb-3 text-[11px] tracking-[0.35em] uppercase text-[var(--ink-dim)]">
+                  Deep Packet Inspection · Real-time telemetry
+                </p>
+                <h1 className="display text-[clamp(3rem,11vw,10rem)]">
+                  <span className="block">Packet</span>
+                  <span className="block outline-text">Intelligence</span>
+                </h1>
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={runAnalysis}
+                  disabled={analysing}
+                  className="mono cursor-pointer border-2 border-[var(--rule-hard)] bg-[var(--acid)] px-5 py-3 text-xs font-bold uppercase text-black shadow-[5px_5px_0_var(--shadow)] transition-transform hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0_var(--shadow)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {analysing ? "Analysing…" : "Run analysis"}
+                </button>
+
+                <button
+                  onClick={() => fileInput.current?.click()}
+                  disabled={analysing}
+                  className="mono cursor-pointer border-2 border-[var(--rule-hard)] bg-[var(--cyan)] px-5 py-3 text-xs font-bold uppercase text-black shadow-[5px_5px_0_var(--shadow)] transition-transform hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0_var(--shadow)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Upload PCAP
+                </button>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept=".pcap,.pcapng"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) void uploadCapture(file)
+                    e.target.value = ""
+                  }}
+                />
+
+                <button
+                  onClick={exportJson}
+                  disabled={!snapshot}
+                  className="mono cursor-pointer border-2 border-[var(--rule-hard)] px-5 py-3 text-xs font-bold uppercase shadow-[5px_5px_0_var(--shadow)] transition-transform hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0_var(--shadow)] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Export JSON
+                </button>
+              </div>
+            </div>
+
+            {error && (
+              <div className="slab mt-8 border-[var(--danger)] p-4">
+                <p className="mono text-xs uppercase text-[var(--danger)]">
+                  ▲ {error}
+                </p>
+              </div>
+            )}
+          </div>
+        </header>
+
+        {/* ================= BODY ================= */}
+        {!snapshot ? (
+          <LoadingState connection={connection} />
+        ) : (
+          <div className="mx-auto max-w-[1600px] px-6 py-10">
+            {/* ---- stat row ---- */}
+            <section className="mb-10 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+              <StatSlab
+                index={1}
+                label="Total packets"
+                value={packets!.total_packets.toLocaleString()}
+                sub={`${snapshot.filtering.forwarded.toLocaleString()} forwarded · ${snapshot.filtering.dropped.toLocaleString()} dropped`}
+                accent="var(--acid)"
               />
-              <p className="text-sm opacity-70">{label}</p>
-              <p className="text-3xl font-bold mt-3">{Number(value).toLocaleString()}</p>
-            </motion.div>
-          ))}
-          <motion.div
-            key="Risk"
-            className={`${glass} p-8 rounded-3xl`}
-            whileHover={{
-              scale: 1.05,
-              rotateX: -mouse.y * 0.2,
-              rotateY: mouse.x * 0.2,
-              boxShadow: "0 0 60px rgba(255,0,0,0.35)"
-            }}
-            transition={{ type: "spring", stiffness: 200, damping: 15 }}
-            style={{
-              transformStyle: "preserve-3d",
-              perspective: 1000,
-              background: `radial-gradient(circle at ${50 + mouse.x}% ${50 + mouse.y}%, rgba(255,255,255,0.35), rgba(255,255,255,0.08))`,
-              backdropFilter: "blur(30px)",
-            }}
-          >
-            <div className="absolute inset-0 pointer-events-none opacity-30"
-              style={{
-                background: `radial-gradient(circle at ${50 - mouse.x}% ${50 - mouse.y}%, rgba(255,0,0,0.4), transparent 60%)`
-              }}
-            />
-            <p className="text-sm opacity-70">Risk Level</p>
-            <div className="flex items-center gap-3 mt-3">
-              <span
-                className={`px-3 py-1 text-xs rounded-full text-white ${riskColor} ${
-                  riskLevel === "High"
-                    ? "animate-pulse shadow-[0_0_20px_rgba(255,0,0,0.8)]"
-                    : ""
-                }`}
-              >
-                {riskLevel}
-              </span>
-              <span className="text-sm opacity-70">
-                Score: {riskScore.toFixed(2)}
-              </span>
-            </div>
-          </motion.div>
-        </div>
+              <StatSlab
+                index={2}
+                label="Volume"
+                value={formatBytes(packets!.total_bytes)}
+                sub={`${packets!.total_bytes.toLocaleString()} bytes raw`}
+                accent="var(--cyan)"
+              />
+              <StatSlab
+                index={3}
+                label="TCP"
+                value={packets!.tcp_packets.toLocaleString()}
+                sub={pct(packets!.tcp_packets, packets!.total_packets)}
+                accent="var(--violet)"
+              />
+              <StatSlab
+                index={4}
+                label="UDP"
+                value={packets!.udp_packets.toLocaleString()}
+                sub={pct(packets!.udp_packets, packets!.total_packets)}
+                accent="var(--magenta)"
+              />
+              <StatSlab
+                index={5}
+                label="Active flows"
+                value={snapshot.activeConnections.toLocaleString()}
+                sub={`${snapshot.apps.length} apps classified`}
+                accent="var(--amber)"
+              />
+            </section>
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-12">
-          <section className={`${glass} p-10 rounded-3xl col-span-2 hover:shadow-[0_0_80px_rgba(255,255,255,0.25)] transition-all duration-500`}>
-            <h2 className="text-lg mb-6 opacity-80">Application Distribution</h2>
-            <div className="h-[520px] bg-white/15 dark:bg-white/10 backdrop-blur-2xl rounded-2xl p-6 border border-white/20 shadow-inner">
-              <Bar data={barData} options={barOptions} />
-            </div>
-          </section>
-
-          <section className={`${glass} p-10 rounded-3xl hover:shadow-[0_0_80px_rgba(255,255,255,0.25)] transition-all duration-500`}>
-            <h2 className="text-lg mb-6 opacity-80">Protocol Split</h2>
-            <div className="h-[320px] bg-white/15 dark:bg-white/10 backdrop-blur-2xl rounded-2xl p-6 border border-white/20 shadow-inner flex items-center justify-center">
-              <Doughnut data={pieData} options={pieOptions} />
-            </div>
-          </section>
-          <section className={`${glass} p-10 rounded-3xl hover:shadow-[0_0_80px_rgba(255,0,0,0.25)] transition-all duration-500`}>
-            <h2 className="text-lg mb-6 opacity-80">Detected Anomalies</h2>
-            <div className="space-y-4">
-              {anomalies.length === 0 ? (
-                <p className="opacity-60 text-sm">No anomalies detected.</p>
-              ) : (
-                anomalies.map((a, i) => (
-                  <div
-                    key={i}
-                    className="px-4 py-3 rounded-xl bg-red-500/20 border border-red-500/40 text-sm"
+            {/* ---- risk banner ---- */}
+            <section className="slab mb-10 relative overflow-hidden p-8">
+              <div
+                className="absolute inset-y-0 left-0 w-2"
+                style={{ background: RISK_COLOR[risk!.risk_level] }}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-8">
+                <div>
+                  <p className="mono text-[11px] tracking-[0.3em] uppercase text-[var(--ink-dim)]">
+                    ML anomaly verdict
+                  </p>
+                  <p
+                    className="display mt-2 text-7xl"
+                    style={{ color: RISK_COLOR[risk!.risk_level] }}
                   >
-                    {a}
+                    {risk!.risk_level} risk
+                  </p>
+                </div>
+
+                <div className="flex gap-10">
+                  <Metric label="Score" value={risk!.risk_score.toFixed(3)} />
+                  <Metric label="Confidence" value={risk!.confidence.toFixed(3)} />
+                  <Metric label="Drop rate" value={`${snapshot.filtering.drop_rate.toFixed(2)}%`} />
+                </div>
+              </div>
+
+              {/* score meter */}
+              <div className="mt-8 h-4 w-full border-2 border-[var(--rule-hard)] bg-[var(--bg-sunken)]">
+                <div
+                  className="h-full transition-[width] duration-700"
+                  style={{
+                    width: `${Math.round(risk!.risk_score * 100)}%`,
+                    background: RISK_COLOR[risk!.risk_level],
+                  }}
+                />
+              </div>
+            </section>
+
+            {/* ---- charts + anomalies ---- */}
+            <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+              <Panel title="Application distribution" span="xl:col-span-2">
+                <PanelErrorBoundary label="Application distribution">
+                  <div className="h-[520px]">
+                    <ApplicationChart apps={snapshot.apps} theme={theme} />
                   </div>
-                ))
-              )}
-            </div>
-          </section>
-        </div>
+                </PanelErrorBoundary>
+              </Panel>
+
+              <div className="flex flex-col gap-6">
+                <Panel title="Protocol split">
+                  <PanelErrorBoundary label="Protocol split">
+                    <div className="h-[240px]">
+                      <ProtocolChart packets={packets!} theme={theme} />
+                    </div>
+                  </PanelErrorBoundary>
+                </Panel>
+
+                <Panel title="Detected anomalies">
+                  <div className="space-y-3">
+                    {risk!.anomalies.length === 0 ? (
+                      <p className="mono text-xs text-[var(--ink-dim)]">
+                        Nothing flagged in this capture.
+                      </p>
+                    ) : (
+                      risk!.anomalies.map((a, i) => (
+                        <div
+                          key={`${a}-${i}`}
+                          className="flex items-start gap-3 border-l-4 border-[var(--danger)] bg-[var(--bg-sunken)] px-3 py-2"
+                        >
+                          <span className="mono text-[10px] text-[var(--danger)]">
+                            {String(i + 1).padStart(2, "0")}
+                          </span>
+                          <span className="mono text-xs">{a}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </Panel>
+              </div>
+            </section>
+
+            {/* ---- run history ---- */}
+            <section className="mt-6">
+              <Panel title="Run history">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[560px] border-collapse">
+                    <thead>
+                      <tr className="border-b-2 border-[var(--rule-hard)]">
+                        {["#", "Timestamp", "Source", "Packets", "Risk"].map((h) => (
+                          <th
+                            key={h}
+                            className="mono px-3 py-2 text-left text-[10px] tracking-[0.2em] uppercase text-[var(--ink-dim)]"
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {history.map((run, i) => (
+                        <tr key={`${run.timestamp}-${i}`} className="border-b border-[var(--rule)]">
+                          <td className="mono px-3 py-2 text-xs text-[var(--ink-dim)]">
+                            {String(history.length - i).padStart(2, "0")}
+                          </td>
+                          <td className="mono px-3 py-2 text-xs">
+                            {new Date(run.timestamp).toLocaleTimeString()}
+                          </td>
+                          <td className="mono px-3 py-2 text-xs">{run.inputFile ?? "—"}</td>
+                          <td className="mono px-3 py-2 text-xs">
+                            {run.totalPackets.toLocaleString()}
+                          </td>
+                          <td className="mono px-3 py-2 text-xs">
+                            <span
+                              className="px-2 py-0.5 text-black"
+                              style={{ background: RISK_COLOR[run.riskLevel as RiskLevel] ?? "var(--acid)" }}
+                            >
+                              {run.riskLevel}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Panel>
+            </section>
+          </div>
+        )}
+
+        <footer className="mt-10 border-t-2 border-[var(--rule-hard)] bg-[var(--bg-sunken)] px-6 py-8">
+          <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4">
+            <p className="display text-3xl">DPI/OPS</p>
+            <p className="mono text-[11px] text-[var(--ink-dim)]">
+              C++ engine · Node control plane · FastAPI scoring · GPL-3.0
+            </p>
+          </div>
+        </footer>
       </div>
-
-      <style jsx global>{`
-        @keyframes zoomBlur {
-          0% {
-            transform: scale(1.2);
-          }
-          50% {
-            transform: scale(1.35);
-          }
-          100% {
-            transform: scale(1.2);
-          }
-        }
-
-        .animate-zoomBlur {
-          animation: zoomBlur 25s ease-in-out infinite;
-        }
-      `}</style>
-      <div className="pointer-events-none absolute inset-0 mix-blend-overlay opacity-20" style={{
-        background: "radial-gradient(circle at center, transparent 60%, rgba(255,0,0,0.15) 100%)",
-        filter: "blur(20px) "
-      }} />
     </main>
+  )
+}
+
+/* ---------------- small local pieces ---------------- */
+
+function pct(part: number, total: number): string {
+  if (total <= 0) return "0.0% of traffic"
+  return `${((part / total) * 100).toFixed(1)}% of traffic`
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="mono text-[10px] tracking-[0.2em] uppercase text-[var(--ink-dim)]">
+        {label}
+      </p>
+      <p className="mono mt-1 text-2xl">{value}</p>
+    </div>
+  )
+}
+
+function Panel({
+  title,
+  children,
+  span = "",
+}: {
+  title: string
+  children: React.ReactNode
+  span?: string
+}) {
+  return (
+    <div className={`slab p-6 ${span}`}>
+      <div className="mb-5 flex items-center gap-3">
+        <span className="h-2 w-8 bg-[var(--ink)]" />
+        <h2 className="mono text-[11px] tracking-[0.25em] uppercase">{title}</h2>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function StatusPill({
+  connection,
+  analysing,
+}: {
+  connection: string
+  analysing: boolean
+}) {
+  const map: Record<string, { text: string; color: string }> = {
+    live: { text: "Live", color: "var(--acid)" },
+    connecting: { text: "Connecting", color: "var(--amber)" },
+    offline: { text: "Offline", color: "var(--danger)" },
+  }
+  const state = analysing
+    ? { text: "Engine running", color: "var(--cyan)" }
+    : map[connection] ?? map.offline
+
+  return (
+    <span className="mono flex items-center gap-2 border-2 border-[var(--rule-hard)] px-3 py-1.5 text-[11px] uppercase">
+      <span
+        className="blink h-2 w-2 rounded-full"
+        style={{ background: state.color }}
+      />
+      {state.text}
+    </span>
+  )
+}
+
+function LoadingState({ connection }: { connection: string }) {
+  return (
+    <div className="flex min-h-[50vh] items-center justify-center px-6">
+      <div className="slab relative overflow-hidden p-12 text-center">
+        <div className="sweep absolute inset-x-0 h-24 bg-[var(--acid)] opacity-[0.07]" />
+        <p className="display text-5xl">
+          {connection === "offline" ? "No signal" : "Awaiting capture"}
+        </p>
+        <p className="mono mt-4 text-xs text-[var(--ink-dim)]">
+          {connection === "offline"
+            ? "Control plane unreachable — check the API on port 4000."
+            : "Connecting to the control plane and requesting the first analysis…"}
+        </p>
+      </div>
+    </div>
   )
 }
