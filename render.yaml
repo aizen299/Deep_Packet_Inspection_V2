@@ -7,8 +7,9 @@
 # private service, paid plans only) restores the compose topology.
 #
 # Free instances suspend when idle and cold-start on the next request, which is
-# why ML_TIMEOUT_MS is raised well above the 10s default — a timeout degrades
-# silently to a null ML verdict and the dashboard renders zeros.
+# why ML_TIMEOUT_MS is raised well above the 10s default — a timeout degrades to
+# a null ML verdict, which the dashboard reports as "Unscored" rather than as
+# low risk, but the capture still goes unscored.
 #
 # Secrets are NOT stored here. Anything marked `sync: false` is prompted for on
 # Blueprint creation and kept out of the repo.
