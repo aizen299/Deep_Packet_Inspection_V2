@@ -116,7 +116,14 @@ Both suites use stdlib runners, so there is no test dependency to install:
 ```
 cd backend/api && npm test
 cd backend/ml  && python -m unittest discover -p 'test_*.py'
+cd backend && ./build.sh && ./build/bin/dpi_tests
 ```
+
+`dpi_tests` covers the protocol extractors and the SNI-to-application mapping.
+It complements the fuzzing rather than repeating it: fuzzing proves the parsers
+survive malformed input, these prove they return the right answer on valid
+input. They caught a live misclassification — `find("x.com")` matched inside
+`netflix.com`, so every Netflix flow was reported as Twitter/X.
 
 CI (`.github/workflows/ci.yml`) additionally builds the C++ engine, runs it
 against a generated capture to check the JSON contract the API depends on, and

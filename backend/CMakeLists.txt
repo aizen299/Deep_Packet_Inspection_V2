@@ -37,6 +37,21 @@ endif()
 
 add_executable(dpi_engine ${SRC_FILES})
 
+# Unit tests for the extractors and the app classifier. Deliberately a separate
+# target from the engine: it links the same sources minus main_dpi.cpp, so the
+# tests exercise the code the engine actually runs rather than a copy.
+set(TEST_SRC_FILES ${SRC_FILES})
+list(REMOVE_ITEM TEST_SRC_FILES src/main_dpi.cpp)
+
+add_executable(dpi_tests
+    tests/test_extractors.cpp
+    ${TEST_SRC_FILES}
+)
+target_link_libraries(dpi_tests
+    Threads::Threads
+    ${PCAP_LIBRARY}
+)
+
 # Link libraries
 target_link_libraries(dpi_engine
     Threads::Threads

@@ -1,4 +1,6 @@
 #include <iostream>
+#include <stdexcept>
+#include <string>
 #include <string>
 #include <sstream>
 #include <vector>
@@ -72,6 +74,41 @@ std::vector<std::string> split(const std::string& s) {
     return tokens;
 }
 
+// Sanity ceiling: far above any useful setting, low enough that a typo
+// cannot ask for an unschedulable number of threads.
+static constexpr int MAX_THREAD_COUNT = 256;
+
+// std::stoi throws on anything that is not a number and on values too large to
+// represent, and both escaped as an uncaught exception -- `--lbs abc` aborted
+// the process instead of reporting a usage error. A zero or negative count is
+// worse than a bad one: packets are routed with `hash % num_lbs`, so it reached
+// a modulo by zero and segfaulted.
+static bool parseThreadCount(const std::string& flag, const char* value, int& out) {
+    try {
+        size_t consumed = 0;
+        const std::string text(value);
+        const int parsed = std::stoi(text, &consumed);
+
+        if (consumed != text.size()) {
+            std::cerr << flag << ": not a number: " << text << "\n";
+            return false;
+        }
+        if (parsed < 1 || parsed > MAX_THREAD_COUNT) {
+            std::cerr << flag << ": must be between 1 and " << MAX_THREAD_COUNT
+                      << " (got " << parsed << ")\n";
+            return false;
+        }
+        out = parsed;
+        return true;
+    } catch (const std::invalid_argument&) {
+        std::cerr << flag << ": not a number: " << value << "\n";
+        return false;
+    } catch (const std::out_of_range&) {
+        std::cerr << flag << ": value out of range: " << value << "\n";
+        return false;
+    }
+}
+
 int main(int argc, char* argv[]) {
     if (argc < 3) {
         printUsage(argv[0]);
@@ -103,9 +140,9 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--rules" && i + 1 < argc) {
             rules_file = argv[++i];
         } else if (arg == "--lbs" && i + 1 < argc) {
-            config.num_load_balancers = std::stoi(argv[++i]);
+            if (!parseThreadCount(arg, argv[++i], config.num_load_balancers)) return 2;
         } else if (arg == "--fps" && i + 1 < argc) {
-            config.fps_per_lb = std::stoi(argv[++i]);
+            if (!parseThreadCount(arg, argv[++i], config.fps_per_lb)) return 2;
         } else if (arg == "--verbose") {
             config.verbose = true;
         } else if (arg == "--json") {

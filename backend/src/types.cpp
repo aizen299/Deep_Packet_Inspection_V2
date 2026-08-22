@@ -55,6 +55,22 @@ std::string appTypeToString(AppType type) {
     }
 }
 
+// Matches a dotted pattern only at a domain-label boundary: the host must equal
+// it, or end with "." + it. A plain substring search silently misattributes
+// traffic -- `find("x.com")` hits inside "netflix.com", and because the Twitter
+// branch is tested before the Netflix one, every Netflix flow was reported as
+// Twitter/X. `t.co` has the same problem inside "sport.com".
+//
+// Brand tokens below ("google", "netflix", ...) intentionally stay substring
+// matches, since they need to catch subdomains like googlevideo.com.
+static bool matchesDomain(const std::string& host, const std::string& pattern) {
+    if (host.size() == pattern.size()) return host == pattern;
+    if (host.size() < pattern.size() + 1) return false;
+    const size_t offset = host.size() - pattern.size();
+    return host[offset - 1] == '.' &&
+           host.compare(offset, pattern.size(), pattern) == 0;
+}
+
 AppType sniToAppType(const std::string& sni) {
     if (sni.empty()) return AppType::UNKNOWN;
     
@@ -72,16 +88,16 @@ AppType sniToAppType(const std::string& sni) {
     
     if (lower_sni.find("youtube") != std::string::npos ||
         lower_sni.find("ytimg") != std::string::npos ||
-        lower_sni.find("youtu.be") != std::string::npos ||
+        matchesDomain(lower_sni, "youtu.be") ||
         lower_sni.find("yt3.ggpht") != std::string::npos) {
         return AppType::YOUTUBE;
     }
     
     if (lower_sni.find("facebook") != std::string::npos ||
         lower_sni.find("fbcdn") != std::string::npos ||
-        lower_sni.find("fb.com") != std::string::npos ||
+        matchesDomain(lower_sni, "fb.com") ||
         lower_sni.find("fbsbx") != std::string::npos ||
-        lower_sni.find("meta.com") != std::string::npos) {
+        matchesDomain(lower_sni, "meta.com")) {
         return AppType::FACEBOOK;
     }
     
@@ -91,14 +107,14 @@ AppType sniToAppType(const std::string& sni) {
     }
     
     if (lower_sni.find("whatsapp") != std::string::npos ||
-        lower_sni.find("wa.me") != std::string::npos) {
+        matchesDomain(lower_sni, "wa.me")) {
         return AppType::WHATSAPP;
     }
     
     if (lower_sni.find("twitter") != std::string::npos ||
         lower_sni.find("twimg") != std::string::npos ||
-        lower_sni.find("x.com") != std::string::npos ||
-        lower_sni.find("t.co") != std::string::npos) {
+        matchesDomain(lower_sni, "x.com") ||
+        matchesDomain(lower_sni, "t.co")) {
         return AppType::TWITTER;
     }
     
@@ -116,10 +132,10 @@ AppType sniToAppType(const std::string& sni) {
     }
     
     if (lower_sni.find("microsoft") != std::string::npos ||
-        lower_sni.find("msn.com") != std::string::npos ||
+        matchesDomain(lower_sni, "msn.com") ||
         lower_sni.find("office") != std::string::npos ||
         lower_sni.find("azure") != std::string::npos ||
-        lower_sni.find("live.com") != std::string::npos ||
+        matchesDomain(lower_sni, "live.com") ||
         lower_sni.find("outlook") != std::string::npos ||
         lower_sni.find("bing") != std::string::npos) {
         return AppType::MICROSOFT;
@@ -133,19 +149,19 @@ AppType sniToAppType(const std::string& sni) {
     }
     
     if (lower_sni.find("telegram") != std::string::npos ||
-        lower_sni.find("t.me") != std::string::npos) {
+        matchesDomain(lower_sni, "t.me")) {
         return AppType::TELEGRAM;
     }
     
     if (lower_sni.find("tiktok") != std::string::npos ||
         lower_sni.find("tiktokcdn") != std::string::npos ||
-        lower_sni.find("musical.ly") != std::string::npos ||
+        matchesDomain(lower_sni, "musical.ly") ||
         lower_sni.find("bytedance") != std::string::npos) {
         return AppType::TIKTOK;
     }
     
     if (lower_sni.find("spotify") != std::string::npos ||
-        lower_sni.find("scdn.co") != std::string::npos) {
+        matchesDomain(lower_sni, "scdn.co")) {
         return AppType::SPOTIFY;
     }
     

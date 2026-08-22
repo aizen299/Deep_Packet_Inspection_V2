@@ -23,6 +23,12 @@ jobs:
       - name: Build
         run: cd backend && chmod +x build.sh && ./build.sh
 
+      - name: Unit tests for the extractors and classifier
+        # Fuzzing proves the parsers survive malformed input; these prove they
+        # return the right answer on well-formed input. A classifier that
+        # silently stopped matching would pass every other job here.
+        run: ./backend/build/bin/dpi_tests
+
       - name: Generate a capture and run the engine
         run: |
           python3 generate_test_pcap.py

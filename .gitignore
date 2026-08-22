@@ -4,6 +4,7 @@
 
 backend/build/
 backend/build-asan/
+backend/build-tsan/
 backend/output/
 backend/bin/
 backend/CMakeFiles/

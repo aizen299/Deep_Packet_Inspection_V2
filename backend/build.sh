@@ -9,6 +9,14 @@ case "$1" in
   debug)
     BUILD_TYPE="Debug"
     ;;
+  tsan)
+    # Races in the engine are the failure mode reading cannot rule out: the
+    # per-FP trackers are written by their owning thread and read by reporting
+    # threads while a run is still in flight.
+    BUILD_DIR="build-tsan"
+    BUILD_TYPE="Debug"
+    EXTRA_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g"
+    ;;
   asan)
     # Separate build dir: the sanitized binary is much slower and should not
     # replace the one the API shells out to.
@@ -22,7 +30,7 @@ case "$1" in
   "")
     ;;
   *)
-    echo "usage: $0 [debug|asan]" >&2
+    echo "usage: $0 [debug|asan|tsan]" >&2
     exit 2
     ;;
 esac
