@@ -284,42 +284,6 @@ The corpus reflects one network at one point in time. Traffic mixes shift —
 QUIC is exactly what invalidated the previous assumptions — so recapture if
 verdicts start looking wrong.
 
----
-
-## Deploying to Render
-
-`render.yaml` is a Blueprint covering all three services on the free tier.
-
-1. Push to GitHub.
-2. In Render: **New → Blueprint**, select the repo, apply `render.yaml`.
-3. Fill in the `sync: false` values. Use the same `API_KEY` for all three
-   services, and that same value again for `NEXT_PUBLIC_API_KEY`.
-4. The first deploy assigns URLs. Set the three cross-references to the URLs
-   Render actually assigned, then rebuild the dashboard:
-   - backend `ML_SERVICE_URL` → the scorer's URL
-   - backend `ALLOWED_ORIGINS` → the dashboard's URL
-   - dashboard `NEXT_PUBLIC_API_URL` → the backend's URL
-
-`*.onrender.com` subdomains are globally unique, so if a service name is already
-taken Render appends a suffix. Read the assigned URL from each service page
-rather than assuming it matches the name in `render.yaml`.
-
-`NEXT_PUBLIC_*` values are inlined at build time, so changing one requires
-**Clear build cache & deploy**, not a restart.
-
-Two things this topology gives up versus `docker-compose.yml`:
-
-- **The scorer is internet-facing.** Under compose it is unreachable except from
-  the backend; here its `API_KEY` check is the only thing gating it. `type:
-  pserv` restores the private topology, but private services are not on the free
-  tier.
-- **Free instances suspend when idle** and cold-start on the next request. The
-  Blueprint sets `ML_TIMEOUT_MS=60000` for this reason — at the 10s default a
-  cold scorer times out, and the failure is quiet: the verdict comes back
-  `null`. The dashboard renders that as "Unscored" rather than as low risk.
-
----
-
 ## Repository layout
 
 ```
