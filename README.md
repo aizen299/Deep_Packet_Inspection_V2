@@ -259,6 +259,13 @@ before trusting it:
 cd backend/ml && python train_model.py
 ```
 
+The Docker image trains the model at build time rather than on first request.
+The artifact is seeded and built from files already in the image, so it matches
+what the service would compute anyway — it just keeps a 10–30 second fit off the
+cold-start path, which matters on hosts that suspend when idle: that delay lands
+on top of container wake-up and can exceed the caller's timeout, surfacing as an
+unscored capture.
+
 `collect_corpus.mjs` imports `buildFeatureVector` from the control plane rather
 than reimplementing it, so a corpus cannot drift from the vectors the scorer is
 actually served at runtime.

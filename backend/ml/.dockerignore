@@ -2,5 +2,7 @@ venv/
 __pycache__/
 *.py[cod]
 
-# Generated at first run; baking a stale one into the image hides drift.
+# Never copy a local artifact in: it may have been fitted from a different
+# corpus, or by a different scikit-learn version than this image installs.
+# The Dockerfile trains a fresh one from the committed corpus instead.
 model.joblib
