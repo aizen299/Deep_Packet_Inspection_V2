@@ -130,7 +130,11 @@ def predict(features: FeatureInput, x_api_key: str | None = Header(default=None)
     # so the previous 0.4/0.2/100 cutoffs annotated essentially every capture.
     explanations = []
 
-    if features.unknown_ratio > 0.5:
+    # Unclassified traffic only means something when it is *not* QUIC. HTTP/3
+    # payloads are encrypted from the first byte, so real browsing measures
+    # 51-86% unknown -- firing on that annotates every ordinary capture. The
+    # signal is TCP traffic the extractors could not read.
+    if features.unknown_ratio > 0.5 and features.udp_ratio < 0.5:
         explanations.append("High unknown application ratio")
 
     if features.dns_ratio > 0.55:
@@ -146,6 +150,20 @@ def predict(features: FeatureInput, x_api_key: str | None = Header(default=None)
     # almost nothing is the shape a scan or flood actually makes.
     if features.packets_per_connection < 2 and features.active_connections > 50:
         explanations.append("Many near-empty connections (scan-like)")
+
+    # Structural override. The scorer is fitted on benign traffic only, so it
+    # measures novelty rather than maliciousness: a flood whose vector happens to
+    # sit inside the benign envelope scores Low. Once real QUIC-heavy browsing was
+    # added to the corpus -- legitimately wide on unknown_ratio and connection
+    # counts -- captures with thousands of one-packet connections stopped standing
+    # out statistically while remaining obviously scan-shaped.
+    #
+    # Benign traffic measured here runs 8-156 packets per connection. Near-1 across
+    # many connections is not a novel pattern to be scored; it is a known one.
+    if features.packets_per_connection < 2 and features.active_connections > 50:
+        risk_level = "High"
+    elif features.drop_rate > 50 and risk_level == "Low":
+        risk_level = "Medium"
 
     # How far outside the training spread this sample sits, in units of that
     # spread -- 0 for a typical benign capture, approaching 1 for a clear outlier.

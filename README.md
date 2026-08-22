@@ -162,10 +162,28 @@ cd backend/ml && python train_model.py
 than reimplementing it, so the corpus cannot drift from the vectors the scorer
 is actually served at runtime.
 
-Real captures are worth adding. The synthetic ranges were guesses until they
-were checked against engine output, and the guesses were wrong: `tcp_ratio`,
-`unknown_ratio` and `dns_ratio` were all off far enough that no real benign
-capture scored Low and 42% scored High.
+`corpus/real_traffic.jsonl` holds vectors captured from an actual network with
+`tcpdump`. It is worth the effort: the synthetic ranges were guesses, and both
+times they were checked against reality they turned out wrong. The second round
+was the larger correction — modern browsing is QUIC-dominated (measured medians
+udp 0.86, tcp 0.14, unknown 0.65) while the corpus assumed tcp 0.94 and unknown
+0.19, so every real capture scored 1.0000 (High).
+
+To add your own:
+
+```
+sudo tcpdump -i en0 -s 512 -w ~/cap1.pcap        # browse for a few minutes
+tcpdump -r ~/cap1.pcap -w /tmp/chunk -C 1        # split for corpus spread
+node backend/ml/collect_corpus.mjs --out backend/ml/corpus/real_traffic.jsonl /tmp/chunk*
+cd backend/ml && python train_model.py
+```
+
+`-s 512` keeps message bodies off disk; only headers and the TLS ClientHello are
+captured, and the corpus itself stores ten aggregate numbers per capture — no
+hostnames, addresses or payloads.
+
+Add only *ordinary* traffic. The scorer trains on benign data alone, so the
+corpus is the definition of normal.
 
 ### Run the engine directly
 

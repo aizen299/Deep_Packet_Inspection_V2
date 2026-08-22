@@ -238,7 +238,7 @@ def _reasons(row: dict) -> list:
     fail-closed API_KEY check and loads the model artifact.
     """
     out = []
-    if row["unknown_ratio"] > 0.5:
+    if row["unknown_ratio"] > 0.5 and row["udp_ratio"] < 0.5:
         out.append("unknown")
     if row["dns_ratio"] > 0.55:
         out.append("dns")
@@ -251,10 +251,18 @@ def _reasons(row: dict) -> list:
     return out
 
 
-def _corpus_rows() -> list:
-    import json
-    with open(train_model.DEFAULT_CORPUS) as fh:
+def _corpus_rows(name: str = "benign.jsonl") -> list:
+    import json, os
+    path = os.path.join(os.path.dirname(train_model.DEFAULT_CORPUS), name)
+    with open(path) as fh:
         return [json.loads(line) for line in fh if line.strip()]
+
+
+def _structural_override(row: dict, level: str) -> str:
+    """Mirrors the override in server.py: known-bad shape beats the score."""
+    if row["packets_per_connection"] < 2 and row["active_connections"] > 50:
+        return "High"
+    return level
 
 
 class TestRealCorpus(unittest.TestCase):
@@ -309,3 +317,82 @@ class TestRealCorpus(unittest.TestCase):
             "scan",
             _reasons(vector(packets_per_connection=1.0, active_connections=2000)),
         )
+
+
+class TestRealTraffic(unittest.TestCase):
+    """corpus/real_traffic.jsonl is captured from an actual network.
+
+    It is the reason the synthetic ranges were rewritten twice. Modern browsing
+    is QUIC-dominated -- measured medians udp 0.86, tcp 0.14, unknown 0.65 --
+    while the corpus had assumed tcp 0.94 and unknown 0.19. Every real capture
+    scored 1.0000 (High) against that model.
+    """
+
+    def test_real_corpus_is_shipped(self):
+        self.assertGreater(len(_corpus_rows("real_traffic.jsonl")), 10)
+
+    def test_training_set_includes_every_corpus_file(self):
+        rng = np.random.default_rng(train_model.SEED)
+        total = train_model.N_SAMPLES + len(_corpus_rows("benign.jsonl")) + len(
+            _corpus_rows("real_traffic.jsonl")
+        )
+        self.assertEqual(len(train_model.training_set(rng)), total)
+
+    def test_real_traffic_is_not_flagged_high(self):
+        """The regression that real captures exposed. A High here means the
+        corpus has drifted away from the traffic mix that actually exists."""
+        rows = _corpus_rows("real_traffic.jsonl")
+        levels = [
+            _structural_override(r, HARNESS.risk(r)[1]) for r in rows
+        ]
+        high = levels.count("High")
+        self.assertEqual(
+            high, 0, f"{high}/{len(rows)} real captures flagged High"
+        )
+
+    def test_most_real_traffic_scores_low(self):
+        rows = _corpus_rows("real_traffic.jsonl")
+        levels = [_structural_override(r, HARNESS.risk(r)[1]) for r in rows]
+        low = levels.count("Low") / len(levels)
+        self.assertGreater(low, 0.8, f"only {low:.0%} of real traffic scored Low")
+
+    def test_quic_heavy_traffic_is_normal(self):
+        """UDP-dominant traffic must not be anomalous by itself -- HTTP/3 is
+        the common case now, not an oddity."""
+        _, level = HARNESS.risk(
+            vector(tcp_ratio=0.14, udp_ratio=0.86, unknown_ratio=0.65,
+                   unique_app_count=3, packets_per_connection=36,
+                   active_connections=68, total_packets=2472,
+                   total_bytes=945_119, dns_ratio=0.11)
+        )
+        self.assertEqual(level, "Low")
+
+
+class TestStructuralOverride(unittest.TestCase):
+    """The scorer measures novelty, not maliciousness.
+
+    Trained on benign traffic only, it cannot be relied on to rank an attack
+    above ordinary traffic -- once the benign envelope legitimately widened to
+    cover real QUIC browsing, a 2000-connection flood stopped being statistically
+    unusual. Known-bad shapes are asserted directly instead of being scored.
+    """
+
+    def test_scan_shape_is_high_regardless_of_score(self):
+        scan = vector(packets_per_connection=1.0, active_connections=2000,
+                      total_packets=2000, unknown_ratio=0.9, unique_app_count=1)
+        self.assertEqual(_structural_override(scan, "Low"), "High")
+
+    def test_override_does_not_fire_on_benign_traffic(self):
+        for row in _corpus_rows("real_traffic.jsonl") + _corpus_rows("benign.jsonl"):
+            self.assertEqual(
+                _structural_override(row, "Low"), "Low",
+                f"override fired on benign traffic: ppc "
+                f"{row['packets_per_connection']:.1f}, "
+                f"conns {row['active_connections']}",
+            )
+
+    def test_a_few_connections_is_not_a_scan(self):
+        # One-packet connections happen in tiny captures; the shape only means
+        # something across many connections.
+        small = vector(packets_per_connection=1.0, active_connections=5)
+        self.assertEqual(_structural_override(small, "Low"), "Low")

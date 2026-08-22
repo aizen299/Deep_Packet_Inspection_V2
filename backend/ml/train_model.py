@@ -58,35 +58,48 @@ def synthesise_normal(n: int, rng: np.random.Generator) -> np.ndarray:
     avg_frame = rng.uniform(80, 1200, n)
     total_bytes = total_packets * avg_frame
 
-    # These three were originally guessed, and the guesses were wrong. Scoring
-    # real engine output against a model fitted to them put 0% of benign
-    # captures in Low and 42% in High -- the corpus, not the traffic, was the
-    # outlier. The ranges below were widened to cover what the engine actually
-    # reports (collect_corpus.mjs), while still allowing the shapes the first
-    # version assumed, so the model is tolerant of both rather than newly
-    # overfitted to one sample.
+    # Two traffic regimes, not one. Real captures from a current browser are
+    # QUIC-dominated -- measured medians were udp 0.86, tcp 0.14, unknown 0.65 --
+    # because HTTP/3 moved most web traffic to UDP and the engine classifies
+    # little of it. The first version of this corpus assumed tcp ~0.94 and
+    # unknown ~0.19, so real browsing scored 1.0000 (High) on every capture.
     #
-    # observed on real captures: tcp ~0.96, udp ~0.04, unknown ~0.33, dns ~0.33
-    # The 0.6 ceiling on unknown_ratio was measured, not picked: at 0.8 a
-    # capture with 48% unknown reads as ordinary and test_dpi.pcap drops to
-    # Low, while 0.6 keeps benign at 100% Low and every attack fixture above
-    # it with no overlap.
-    udp_ratio = rng.beta(1.5, 12, n) * 0.6
-    other_l4 = rng.beta(1, 30, n) * 0.2
+    # Classic TCP-heavy traffic still occurs, so the corpus samples both rather
+    # than swapping one narrow assumption for another.
+    quic_heavy = rng.random(n) < 0.55
+
+    udp_ratio = np.where(
+        quic_heavy,
+        rng.beta(6, 2, n) * 0.99,        # HTTP/3 browsing: UDP dominant
+        rng.beta(1.5, 12, n) * 0.6,      # classic: a small UDP tail
+    )
+    other_l4 = rng.beta(1, 30, n) * 0.15
     tcp_ratio = np.clip(1 - udp_ratio - other_l4, 0, 1)
 
-    # unknown_ratio and dns_ratio are shares of *classified connections*, not of
-    # packets, so short DNS flows weigh as much as long TLS ones and both sit
-    # far higher than packet-share intuition suggests.
-    unknown_ratio = rng.beta(2.5, 5, n) * 0.6
+    # unknown_ratio tracks the regime: QUIC payloads are encrypted from the first
+    # byte, so far less of that traffic carries a readable SNI or Host.
+    unknown_ratio = np.where(
+        quic_heavy,
+        rng.beta(5, 3, n) * 0.90,
+        rng.beta(2.5, 5, n) * 0.6,
+    )
+
+    # Shares of classified *connections*, so short DNS flows weigh as much as
+    # long TLS ones -- higher than packet-share intuition suggests.
     dns_ratio = rng.beta(2, 5, n) * 0.7
 
     # Reported apps are capped at top-8 plus "Other".
-    unique_app_count = rng.integers(3, 10, n).astype(float)
+    # Fewer applications resolve when most traffic is QUIC.
+    unique_app_count = np.where(
+        quic_heavy, rng.integers(2, 7, n), rng.integers(3, 10, n)
+    ).astype(float)
 
     # Benign flows carry several packets each, so connections track packets
     # without approaching one-packet-per-connection.
-    packets_per_connection = np.exp(rng.uniform(np.log(2.5), np.log(60), n))
+    # Real sessions run long: measured p1-p99 was 8-156 packets per connection,
+    # well past the 60 this previously allowed. The floor stays above 6 because
+    # no benign capture measured here came close to 1 -- that is the scan shape.
+    packets_per_connection = np.exp(rng.uniform(np.log(6.0), np.log(220), n))
     active_connections = np.maximum(1.0, total_packets / packets_per_connection)
 
     # Nothing is dropped unless a rule matched; a small tail covers light filtering.
@@ -134,10 +147,17 @@ def training_set(rng: np.random.Generator, corpus_path: str | None = None) -> np
     """
     X = synthesise_normal(N_SAMPLES, rng)
 
-    path = corpus_path or (DEFAULT_CORPUS if os.path.exists(DEFAULT_CORPUS) else None)
-    if path:
-        real = load_corpus(path)
-        X = np.vstack([X, real])
+    if corpus_path:
+        return np.vstack([X, load_corpus(corpus_path)])
+
+    # Every shipped corpus file, not just one: benign.jsonl is generated traffic
+    # and real_traffic.jsonl is captured from an actual network. The second is
+    # what showed the synthetic ranges were modelling a decade-old traffic mix.
+    corpus_dir = os.path.dirname(DEFAULT_CORPUS)
+    if os.path.isdir(corpus_dir):
+        for name in sorted(os.listdir(corpus_dir)):
+            if name.endswith(".jsonl"):
+                X = np.vstack([X, load_corpus(os.path.join(corpus_dir, name))])
     return X
 
 
