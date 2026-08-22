@@ -212,14 +212,85 @@ function enrichStats(rawData, inputFile) {
 }
 
 
-function runEngine(inputPath, outputPath, inputLabel, res, onComplete = () => {}) {
-  if (engineBusy) {
-    onComplete()
-    return res.status(409).json({
-      success: false,
-      message: "Engine is busy. Try again shortly.",
-    })
+// One engine run at a time, but callers queue rather than being turned away.
+// The serialisation is deliberate -- the engine saturates its own thread pool
+// and writes to a fixed output path -- so the queue exists to make a second
+// caller wait, not to run anything in parallel.
+//
+// Both bounds matter. Without a depth cap the queue is an unbounded allocation
+// driven by unauthenticated-adjacent traffic; without a wait timeout a caller
+// can be parked behind a slow run until its own socket dies.
+const MAX_QUEUE_DEPTH = Number(process.env.MAX_QUEUE_DEPTH || 10)
+const QUEUE_WAIT_MS = Number(process.env.QUEUE_WAIT_MS || 60000)
+
+const engineQueue = []
+
+/** Responds and releases the job's resources exactly once. */
+function settleJob(job, status, message) {
+  if (job.settled) return
+  job.settled = true
+  clearTimeout(job.waitTimer)
+  job.onComplete()
+  if (!job.res.headersSent) {
+    job.res.status(status).json({ success: false, message })
   }
+}
+
+function dequeue(job) {
+  const i = engineQueue.indexOf(job)
+  if (i !== -1) engineQueue.splice(i, 1)
+}
+
+function pumpQueue() {
+  const next = engineQueue.shift()
+  if (next) executeJob(next)
+}
+
+function runEngine(inputPath, outputPath, inputLabel, res, onComplete = () => {}) {
+  const job = {
+    inputPath,
+    outputPath,
+    inputLabel,
+    res,
+    onComplete,
+    settled: false,
+    waitTimer: null,
+  }
+
+  if (!engineBusy) return executeJob(job)
+
+  if (engineQueue.length >= MAX_QUEUE_DEPTH) {
+    return settleJob(
+      job,
+      503,
+      `Engine queue is full (${MAX_QUEUE_DEPTH} waiting). Try again shortly.`
+    )
+  }
+
+  job.waitTimer = setTimeout(() => {
+    dequeue(job)
+    settleJob(job, 504, `Timed out after ${QUEUE_WAIT_MS}ms waiting for the engine`)
+  }, QUEUE_WAIT_MS)
+
+  // A caller that hangs up should not keep its slot, and its upload should not
+  // sit in the temp dir until the timeout fires.
+  res.on("close", () => {
+    if (job.settled || job.running) return
+    dequeue(job)
+    clearTimeout(job.waitTimer)
+    job.settled = true
+    job.onComplete()
+  })
+
+  engineQueue.push(job)
+}
+
+function executeJob(job) {
+  if (job.settled) return pumpQueue() // dropped while queued
+
+  const { inputPath, outputPath, inputLabel, res } = job
+  job.running = true
+  clearTimeout(job.waitTimer)
 
   engineBusy = true
   const start = Date.now()
@@ -312,7 +383,11 @@ function runEngine(inputPath, outputPath, inputLabel, res, onComplete = () => {}
           res.status(500).json({ success: false, message: "Internal error" })
         }
       } finally {
-        onComplete()
+        job.settled = true
+        job.onComplete()
+        // Start the next caller only after this run has fully released the
+        // engine, so the one-at-a-time invariant holds across the handoff.
+        pumpQueue()
       }
     }
   )
