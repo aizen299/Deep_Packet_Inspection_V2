@@ -2,13 +2,19 @@
 
 Run directly to regenerate the artifact:
 
-    python train_model.py            # synthetic baseline corpus
-    python train_model.py --corpus captures.jsonl   # plus real engine output
+    python train_model.py                           # synthetic + shipped corpus
+    python train_model.py --corpus captures.jsonl   # substitute your own
 
-`captures.jsonl` is one JSON object per line using the FEATURE_NAMES keys --
-exactly the body the control plane POSTs to /predict. Feeding real captures in
-is the intended way to improve the model; the synthetic corpus exists so a
-clean clone still produces a scorer that discriminates.
+corpus/benign.jsonl ships with the repo and is loaded by default: one JSON
+object per line using the FEATURE_NAMES keys, which is exactly the body the
+control plane POSTs to /predict. Regenerate it with:
+
+    python3 generate_benign_pcap.py --out b.pcap --seed N     # for several N
+    node backend/ml/collect_corpus.mjs --out corpus/benign.jsonl b*.pcap
+
+The synthetic corpus exists so a clean clone still produces a scorer that
+discriminates; the real vectors exist because the synthetic ranges were wrong
+until they were checked against actual engine output.
 
 The previous baseline trained on N(0.5, 0.1) noise while real features arrive
 unscaled, so every input landed far outside the training distribution and the
@@ -30,6 +36,13 @@ from features import FEATURE_NAMES, N_FEATURES, preprocess
 
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model.joblib")
 
+# Feature vectors from real engine runs over generate_benign_pcap.py captures.
+# Loaded by default: the synthetic ranges were calibrated against these, and
+# training without them drifts back toward assumptions nothing checks.
+DEFAULT_CORPUS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "corpus", "benign.jsonl"
+)
+
 SEED = 42
 N_SAMPLES = 4000
 
@@ -45,13 +58,28 @@ def synthesise_normal(n: int, rng: np.random.Generator) -> np.ndarray:
     avg_frame = rng.uniform(80, 1200, n)
     total_bytes = total_packets * avg_frame
 
-    # Benign traffic is mostly TCP with a UDP tail; the remainder is other L4.
-    tcp_ratio = rng.beta(6, 2, n) * 0.98
-    udp_ratio = np.clip((1 - tcp_ratio) * rng.uniform(0.2, 0.95, n), 0, 1)
+    # These three were originally guessed, and the guesses were wrong. Scoring
+    # real engine output against a model fitted to them put 0% of benign
+    # captures in Low and 42% in High -- the corpus, not the traffic, was the
+    # outlier. The ranges below were widened to cover what the engine actually
+    # reports (collect_corpus.mjs), while still allowing the shapes the first
+    # version assumed, so the model is tolerant of both rather than newly
+    # overfitted to one sample.
+    #
+    # observed on real captures: tcp ~0.96, udp ~0.04, unknown ~0.33, dns ~0.33
+    # The 0.6 ceiling on unknown_ratio was measured, not picked: at 0.8 a
+    # capture with 48% unknown reads as ordinary and test_dpi.pcap drops to
+    # Low, while 0.6 keeps benign at 100% Low and every attack fixture above
+    # it with no overlap.
+    udp_ratio = rng.beta(1.5, 12, n) * 0.6
+    other_l4 = rng.beta(1, 30, n) * 0.2
+    tcp_ratio = np.clip(1 - udp_ratio - other_l4, 0, 1)
 
-    # The engine classifies most benign traffic; a modest unknown tail is normal.
-    unknown_ratio = rng.beta(2, 6, n) * 0.5
-    dns_ratio = rng.beta(2, 12, n) * 0.4
+    # unknown_ratio and dns_ratio are shares of *classified connections*, not of
+    # packets, so short DNS flows weigh as much as long TLS ones and both sit
+    # far higher than packet-share intuition suggests.
+    unknown_ratio = rng.beta(2.5, 5, n) * 0.6
+    dns_ratio = rng.beta(2, 5, n) * 0.7
 
     # Reported apps are capped at top-8 plus "Other".
     unique_app_count = rng.integers(3, 10, n).astype(float)
@@ -97,6 +125,22 @@ def load_corpus(path: str) -> np.ndarray:
     return np.array(rows, dtype=float)
 
 
+def training_set(rng: np.random.Generator, corpus_path: str | None = None) -> np.ndarray:
+    """Synthetic baseline plus whatever real vectors are available.
+
+    Used by main() and by the server's first-run bootstrap, so a model built on
+    a clean image matches one built here rather than quietly omitting the real
+    corpus.
+    """
+    X = synthesise_normal(N_SAMPLES, rng)
+
+    path = corpus_path or (DEFAULT_CORPUS if os.path.exists(DEFAULT_CORPUS) else None)
+    if path:
+        real = load_corpus(path)
+        X = np.vstack([X, real])
+    return X
+
+
 def build(train_X: np.ndarray) -> dict:
     pipeline = Pipeline(
         [
@@ -134,12 +178,8 @@ def main() -> None:
     args = ap.parse_args()
 
     rng = np.random.default_rng(SEED)
-    X = synthesise_normal(N_SAMPLES, rng)
-
-    if args.corpus:
-        real = load_corpus(args.corpus)
-        print(f"corpus: {len(real)} real vectors from {args.corpus}")
-        X = np.vstack([X, real])
+    X = training_set(rng, args.corpus)
+    print(f"training samples: {len(X)} ({N_SAMPLES} synthetic)")
 
     assert X.shape[1] == N_FEATURES, X.shape
     artifact = build(X)

@@ -76,7 +76,7 @@ def load_or_train_model():
     import train_model
 
     rng = np.random.default_rng(train_model.SEED)
-    artifact = train_model.build(train_model.synthesise_normal(train_model.N_SAMPLES, rng))
+    artifact = train_model.build(train_model.training_set(rng))
     joblib.dump(artifact, MODEL_PATH)
     return artifact
 
@@ -123,20 +123,27 @@ def predict(features: FeatureInput, x_api_key: str | None = Header(default=None)
     elif risk_score > MEDIUM_THRESHOLD:
         risk_level = "Medium"
 
+    # Rule-based reasons shown next to the verdict. These thresholds sit above
+    # the observed benign range (backend/ml/corpus/benign.jsonl), because a
+    # reason that fires on ordinary traffic trains the reader to ignore it.
+    # Benign captures run unknown ~0.33, dns ~0.33 and up to ~230 connections,
+    # so the previous 0.4/0.2/100 cutoffs annotated essentially every capture.
     explanations = []
 
-    if features.unknown_ratio > 0.4:
+    if features.unknown_ratio > 0.5:
         explanations.append("High unknown application ratio")
 
-    if features.dns_ratio > 0.2:
+    if features.dns_ratio > 0.55:
         explanations.append("Elevated DNS activity")
 
-    if features.active_connections > 100:
+    if features.active_connections > 500:
         explanations.append("High connection count spike")
 
     if features.drop_rate > 20:
         explanations.append("Elevated filter drop rate")
 
+    # Volume alone is not suspicious; volume spread over connections that carry
+    # almost nothing is the shape a scan or flood actually makes.
     if features.packets_per_connection < 2 and features.active_connections > 50:
         explanations.append("Many near-empty connections (scan-like)")
 

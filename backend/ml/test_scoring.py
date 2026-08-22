@@ -45,8 +45,9 @@ class ScorerHarness:
 
     def __init__(self):
         rng = np.random.default_rng(train_model.SEED)
-        corpus = train_model.synthesise_normal(train_model.N_SAMPLES, rng)
-        artifact = train_model.build(corpus)
+        # training_set(), not synthesise_normal(), so the tests exercise the
+        # model the service actually serves -- shipped real corpus included.
+        artifact = train_model.build(train_model.training_set(rng))
         self.pipeline = artifact["pipeline"]
         self.train_scores = artifact["train_scores"]
 
@@ -228,3 +229,83 @@ class TestDeterminism(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _reasons(row: dict) -> list:
+    """Mirrors the rule-based explanations in server.py.
+
+    Duplicated rather than imported because importing server executes its
+    fail-closed API_KEY check and loads the model artifact.
+    """
+    out = []
+    if row["unknown_ratio"] > 0.5:
+        out.append("unknown")
+    if row["dns_ratio"] > 0.55:
+        out.append("dns")
+    if row["active_connections"] > 500:
+        out.append("conns")
+    if row["drop_rate"] > 20:
+        out.append("drop")
+    if row["packets_per_connection"] < 2 and row["active_connections"] > 50:
+        out.append("scan")
+    return out
+
+
+def _corpus_rows() -> list:
+    import json
+    with open(train_model.DEFAULT_CORPUS) as fh:
+        return [json.loads(line) for line in fh if line.strip()]
+
+
+class TestRealCorpus(unittest.TestCase):
+    """Guards the miscalibration that shipping real vectors exposed.
+
+    The synthetic corpus was written by guessing at tcp_ratio, unknown_ratio and
+    dns_ratio. Scored against it, 0% of real captures came back Low and 42% came
+    back High -- the corpus was the outlier, not the traffic. Nothing caught that
+    until real engine output was compared against it.
+    """
+
+    def test_corpus_is_shipped(self):
+        import os
+        self.assertTrue(
+            os.path.exists(train_model.DEFAULT_CORPUS),
+            "the real corpus must ship; without it training silently drifts back "
+            "to unchecked assumptions",
+        )
+
+    def test_training_set_includes_the_corpus(self):
+        rng = np.random.default_rng(train_model.SEED)
+        self.assertGreater(
+            len(train_model.training_set(rng)),
+            train_model.N_SAMPLES,
+            "training_set() must fold in the shipped corpus",
+        )
+
+    def test_real_benign_captures_score_low(self):
+        rows = _corpus_rows()
+        levels = [HARNESS.risk(r)[1] for r in rows]
+        low = levels.count("Low") / len(levels)
+        self.assertGreater(
+            low,
+            0.95,
+            f"only {low:.0%} of real benign captures scored Low; the synthetic "
+            f"ranges have drifted away from what the engine emits",
+        )
+
+    def test_explanations_stay_quiet_on_benign_traffic(self):
+        # Benign captures run unknown ~0.33, dns ~0.33 and up to ~230
+        # connections. The original 0.4/0.2/100 cutoffs annotated every one of
+        # them, and a reason that always fires is one the reader learns to skip.
+        noisy = [r for r in _corpus_rows() if _reasons(r)]
+        self.assertEqual(
+            noisy,
+            [],
+            f"{len(noisy)} benign captures triggered an anomaly reason",
+        )
+
+    def test_scan_shape_still_explained(self):
+        self.assertIn(
+            "scan",
+            _reasons(vector(packets_per_connection=1.0, active_connections=2000)),
+        )

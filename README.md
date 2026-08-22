@@ -48,6 +48,8 @@ cp .env.example .env
 | `ENGINE_TIMEOUT_MS`   | api          | Engine subprocess timeout (default 120000).           |
 | `ML_TIMEOUT_MS`       | api          | ML request timeout (default 10000). Raise for cold starts.|
 | `MAX_UPLOAD_BYTES`    | api          | Upload size cap (default 100 MB).                     |
+| `MAX_QUEUE_DEPTH`     | api          | Callers waiting for the engine (default 10, then 503). |
+| `QUEUE_WAIT_MS`       | api          | Max wait in the queue (default 60000, then 504).      |
 | `NEXT_PUBLIC_API_URL` | dashboard    | Inlined at **build** time; changing it needs a rebuild.|
 | `BASIC_AUTH_USER`     | dashboard    | Basic Auth wall. Blank = disabled.                    |
 | `BASIC_AUTH_PASSWORD` | dashboard    | Basic Auth wall. Blank = disabled.                    |
@@ -136,6 +138,27 @@ The generator corrupts one length field at a time and leaves the rest valid, so
 a crash points at a specific field. Cases are seeded — `--seed` reproduces one.
 CI runs five seeds and checks the sanitizer traps a known overread first, since
 a clean run from an uninstrumented binary would be a false all-clear.
+
+### Retraining the anomaly scorer
+
+The scorer is an IsolationForest fitted on benign traffic only, so the corpus
+defines what "normal" means. `backend/ml/corpus/benign.jsonl` ships with the
+repo and is loaded by default; it holds feature vectors from real engine runs.
+
+```
+python3 generate_benign_pcap.py --out b1.pcap --seed 1     # repeat for more seeds
+node backend/ml/collect_corpus.mjs --out backend/ml/corpus/benign.jsonl b*.pcap
+cd backend/ml && python train_model.py
+```
+
+`collect_corpus.mjs` imports `buildFeatureVector` from the control plane rather
+than reimplementing it, so the corpus cannot drift from the vectors the scorer
+is actually served at runtime.
+
+Real captures are worth adding. The synthetic ranges were guesses until they
+were checked against engine output, and the guesses were wrong: `tcp_ratio`,
+`unknown_ratio` and `dns_ratio` were all off far enough that no real benign
+capture scored Low and 42% scored High.
 
 ### Run the engine directly
 
